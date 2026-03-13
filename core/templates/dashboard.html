@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FriendlyDNSReporter - Python Edition</title>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --card-bg: #1e293b;
+            --text: #f1f5f9;
+            --accent: #3b82f6;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --border: #334155;
+        }
+        body {
+            font-family: 'Inter', system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 20px;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px;
+            background: var(--card-bg);
+            border-radius: 12px;
+            margin-bottom: 20px;
+            border: 1px solid var(--border);
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+        }
+        .card {
+            background: var(--card-bg);
+            padding: 20px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        th, td {
+            text-align: left;
+            padding: 12px;
+            border-bottom: 1px solid var(--border);
+        }
+        .badge {
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+        .status-ok { background: rgba(16, 185, 129, 0.1); color: var(--success); }
+        .status-fail { background: rgba(239, 68, 68, 0.1); color: var(--danger); }
+        .status-warn { background: rgba(245, 158, 11, 0.1); color: var(--warning); }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🔍 FriendlyDNSReporter</h1>
+        <div>v2.1 (Python Edition)</div>
+    </div>
+    
+    <div class="grid">
+        {% for result in results %}
+        <div class="card">
+            <h3>{{ result.domain }} ({{ result.type }})</h3>
+            <div><strong>Server:</strong> {{ result.server }} ({{ result.group }})</div>
+            <table>
+                <tr><td>Status</td><td><span class="badge {% if result.status == 'NOERROR' %}status-ok{% else %}status-fail{% endif %}">{{ result.status }}</span></td></tr>
+                <tr><td>Latency</td><td>{{ result.latency|round(2) }}ms</td></tr>
+                <tr><td>Ping</td><td><span class="badge {% if result.ping == 'OK' %}status-ok{% else %}status-fail{% endif %}">{{ result.ping }}</span></td></tr>
+                <tr><td>DNSSEC</td><td><span class="badge {% if result.dnssec == 'VALIDATING' %}status-ok{% else %}status-warn{% endif %}">{{ result.dnssec }}</span></td></tr>
+                <tr><td>Version</td><td>{{ result.version }}</td></tr>
+                <tr><td>DoH/DoT</td><td>{{ result.doh }} / {{ result.dot }}</td></tr>
+            </table>
+            <div style="margin-top: 10px; font-size: 0.85rem; color: #94a3b8;">
+                <strong>Answers:</strong> {{ result.answers|join(', ') }}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</body>
+</html>
