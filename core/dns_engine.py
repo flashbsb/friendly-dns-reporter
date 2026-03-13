@@ -92,43 +92,50 @@ class DNSEngine:
             return False
 
     def check_recursion(self, server):
-        """Check if recursion is available (RA flag). Returns True, False, or None."""
+        """Check if recursion is available. Returns (True/False/None, latency)."""
+        start = time.time()
         try:
             query = dns.message.make_query("google.com", "A")
             response = dns.query.udp(query, server, timeout=self.timeout)
-            return bool(response.flags & dns.flags.RA)
+            latency = (time.time() - start) * 1000
+            return bool(response.flags & dns.flags.RA), latency
         except dns.exception.Timeout:
-            return None
+            return None, self.timeout * 1000
         except:
-            return False
+            return False, 0
 
     def query_version(self, server):
-        """Query the BIND version. Returns string, "HIDDEN", or None."""
+        """Query the BIND version. Returns (string/HIDDEN/None, latency)."""
+        start = time.time()
         try:
             query = dns.message.make_query("version.bind", "TXT", rdclass=dns.rclass.CH)
             response = dns.query.udp(query, server, timeout=self.timeout)
+            latency = (time.time() - start) * 1000
             if response.answer:
-                return response.answer[0][0].to_text().strip('"')
-            return "HIDDEN"
+                return response.answer[0][0].to_text().strip('"'), latency
+            return "HIDDEN", latency
         except dns.exception.Timeout:
-            return None
+            return None, self.timeout * 1000
         except:
-            return "HIDDEN"
+            return "HIDDEN", 0
 
     def check_dot(self, server):
-        """Check if server supports DoT on port 853. Returns True, False, or None."""
+        """Check if server supports DoT. Returns (True/False/None, latency)."""
+        start = time.time()
         try:
             query = dns.message.make_query("google.com", "A")
             dns.query.tls(query, server, timeout=self.timeout)
-            return True
+            latency = (time.time() - start) * 1000
+            return True, latency
         except dns.exception.Timeout:
-            return None
+            return None, self.timeout * 1000
         except:
-            return False
+            return False, 0
 
     def check_doh(self, server):
-        """Check if server supports DoH. Returns True, False, or None."""
+        """Check if server supports DoH. Returns (True/False/None, latency)."""
         import requests
+        start = time.time()
         try:
             query = dns.message.make_query("google.com", "A")
             wire_query = query.to_wire()
@@ -136,11 +143,11 @@ class DNSEngine:
             headers = {"Content-Type": "application/dns-message", "Accept": "application/dns-message"}
             
             response = requests.post(url, data=wire_query, headers=headers, timeout=self.timeout, verify=False)
+            latency = (time.time() - start) * 1000
             if response.status_code == 200:
-                dns.message.from_wire(response.content)
-                return True
-            return False
+                return True, latency
+            return False, 0
         except requests.exceptions.Timeout:
-            return None
+            return None, self.timeout * 1000
         except:
-            return False
+            return False, 0

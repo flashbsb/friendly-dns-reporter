@@ -126,11 +126,12 @@
                     </span>
                 </div>
                 <table class="stats-table">
-                    <tr><td class="label">Avg Latency</td><td>{{ data.latency|round(1) }}ms</td></tr>
-                    <tr><td class="label">Port 53 (TCP)</td><td><span class="{{ 'val-ok' if data.port53 == 'OPEN' else 'val-err' }}">{{ data.port53 }}</span></td></tr>
-                    <tr><td class="label">Port 443 (TCP)</td><td><span class="{{ 'val-ok' if data.port443 == 'OPEN' else 'val-err' }}">{{ data.port443 }}</span></td></tr>
-                    <tr><td class="label">Recursion (UDP)</td><td><span class="{{ 'val-ok' if data.recursion == 'OPEN' else ('val-err' if data.recursion == 'UNREACHABLE' else ('val-warn' if data.recursion == 'TIMEOUT' else 'val-err')) }}">{{ data.recursion }}</span></td></tr>
-                    <tr><td class="label">Version String</td><td><span class="{{ 'val-none' if data.version in ['UNREACHABLE', 'HIDDEN', 'TIMEOUT'] else 'val-ok' }}">{{ data.version }}</span></td></tr>
+                    <tr><td class="label">Ping Avg</td><td><span class="{{ 'val-ok' if data.ping == 'OK' else 'val-err' }}">{{ data.ping }}</span> ({{ data.latency|round(0) }}ms)</td></tr>
+                    <tr><td class="label">Port 53 (TCP)</td><td><span class="{{ 'val-ok' if data.port53 == 'OPEN' else 'val-err' }}">{{ data.port53 }}</span> ({{ data.port53_lat|round(0) }}ms)</td></tr>
+                    <tr><td class="label">Port 443 (TCP)</td><td><span class="{{ 'val-ok' if data.port443 == 'OPEN' else 'val-err' }}">{{ data.port443 }}</span> ({{ data.port443_lat|round(0) }}ms)</td></tr>
+                    <tr><td class="label">Recursion (UDP)</td><td><span class="{{ 'val-ok' if data.recursion == 'OPEN' else ('val-err' if data.recursion == 'UNREACHABLE' else ('val-warn' if data.recursion == 'TIMEOUT' else 'val-err')) }}">{{ data.recursion }}</span> ({{ data.recursion_lat|round(0) }}ms)</td></tr>
+                    <tr><td class="label">Version String</td><td><span class="{{ 'val-none' if data.version in ['UNREACHABLE', 'HIDDEN', 'TIMEOUT'] else 'val-ok' }}">{{ data.version }}</span> ({{ data.version_lat|round(0) }}ms)</td></tr>
+                    <tr><td class="label">Groups</td><td>{{ data.groups }}</td></tr>
                     <tr><td class="label">DoH / DoT</td><td>{{ data.doh }} / {{ data.dot }}</td></tr>
                 </table>
             </div>

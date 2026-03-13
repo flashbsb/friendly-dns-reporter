@@ -9,12 +9,14 @@ class Connectivity:
         self.timeout = timeout
 
     def check_port(self, host, port):
-        """Check if a TCP port is open."""
+        """Check if a TCP port is open. Returns (is_open, latency_ms)."""
+        start = time.time()
         try:
             with socket.create_connection((host, port), timeout=self.timeout):
-                return True
+                latency = (time.time() - start) * 1000
+                return True, latency
         except (socket.timeout, ConnectionRefusedError, socket.error):
-            return False
+            return False, 0
 
     def ping(self, host, count=3):
         """Cross-platform ping using icmplib (best) or system ping (fallback)."""

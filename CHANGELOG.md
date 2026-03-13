@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.7.0] - 2026-03-13
+### Added
+- **Granular Latency Tracking**: Phase 1 now measures and displays the specific response time for every successful probe (Port 53 TCP, Port 443 TCP, and DNS UDP).
+- **Performance Insight**: Both the terminal output and HTML dashboard now show exactly how long each infrastructure component took to respond, rather than just a single ping latency.
+
+## [2.6.1] - 2026-03-13
+### Added
+- **Group Tracking**: Phase 1 now displays which groups each server belongs to in the terminal and HTML report.
+
+## [2.6.0] - 2026-03-13
+### Optimized
+- **Scoped Diagnostics**: The script now automatically identifies which DNS groups are being used in `domains.csv`.
+- **Performance**: Phase 1 now only tests servers that are actually required for the current run, ignoring unrelated infrastructure in `groups.csv`.
+
 ## [2.5.1] - 2026-03-13
 ### Fixed
 - **Terminal UI Headers**: Added clear headers for each diagnostic phase (Infrastructure, Zones, Records) for better readability.

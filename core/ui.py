@@ -22,12 +22,12 @@ def print_header(threads, consistency, target):
 def print_phase(name):
     print(f"\n{BOLD}{INFO}>>> PHASE {name}{RESET}")
     if "1" in name:
-        print(f"  {'IP Address':15} | {'Ping':4} | {'53-TCP':6} | {'53-UDP':6} | {'443-TCP':7} | {'Recursion':9} | Status")
+        print(f"  {'IP Address':15} | {'Groups':15} | {'Ping @ Lat':9} | {'53-TCP':10} | {'53-UDP':10} | {'443-TCP':10} | {'Recursion':9} | Status")
     elif "2" in name:
         print(f"  {'Domain':25} -> {'Server':15} | {'Serial':10} | AXFR Status")
     elif "3" in name:
         print(f"  {'Group':10} | {'Target':30} -> {'Server':15} | {'Type':5} | {'Status':12}")
-    print("-" * 88)
+    print("-" * 105)
 
 def print_summary_table(total, success, fail, div, sync_issues, reports):
     print("\n" + "=" * 80)
@@ -52,17 +52,29 @@ def print_interrupt():
 
 def print_infra_detail(srv, data):
     ping_clr = OK if data['ping'] == "OK" else FAIL
+    ping_str = f"{data['ping']} ({data['latency']:.0f}ms)" if data['ping'] == "OK" else data['ping']
+    
     p53t_clr = OK if data['port53'] == "OPEN" else FAIL
+    p53t_str = f"{data['port53']} ({data['port53_lat']:.0f}ms)" if data['port53'] == "OPEN" else data['port53']
+    
     # UDP works if either recursion or version didn't timeout
-    udp_ok = data['recursion'] not in ["TIMEOUT", "UNREACHABLE"] or data['version'] not in ["TIMEOUT", "UNREACHABLE"]
+    udp_ok = data['recursion'] not in ["TIMEOUT", "UNREACHABLE", "DISABLED"] or \
+             data['version'] not in ["TIMEOUT", "UNREACHABLE", "DISABLED"]
     p53u_clr = OK if udp_ok else FAIL
+    # Use version latency for UDP if recursion is timeout/disabled
+    udp_lat = data['recursion_lat'] if data['recursion'] not in ["TIMEOUT", "DISABLED"] else data['version_lat']
+    udp_str = f"OK ({udp_lat:.0f}ms)" if udp_ok else "TIMEOU"
+    
     p443_clr = OK if data['port443'] == "OPEN" else FAIL
+    p443_str = f"{data['port443']} ({data['port443_lat']:.0f}ms)" if data['port443'] == "OPEN" else data['port443']
+    
     rec_clr = OK if data['recursion'] == "OPEN" else (WARN if data['recursion'] == "TIMEOUT" else FAIL)
     alive_str = f"{OK}ALIVE{RESET}" if not data['is_dead'] else f"{FAIL}DEAD{RESET}"
     
-    udp_status = "OK" if udp_ok else "TIMEOU"
+    groups_str = data.get('groups', 'N/A')
+    if len(groups_str) > 15: groups_str = groups_str[:12] + "..."
     
-    print(f"  {srv:15} | {ping_clr}{data['ping']:4}{RESET} | {p53t_clr}{data['port53']:6}{RESET} | {p53u_clr}{udp_status:6}{RESET} | {p443_clr}{data['port443']:7}{RESET} | {rec_clr}{data['recursion']:9}{RESET} | {alive_str}")
+    print(f"  {srv:15} | {groups_str:15} | {ping_clr}{ping_str:9}{RESET} | {p53t_clr}{p53t_str:10}{RESET} | {p53u_clr}{udp_str:10}{RESET} | {p443_clr}{p443_str:10}{RESET} | {rec_clr}{data['recursion']:9}{RESET} | {alive_str}")
 
 def print_zone_detail(srv, domain, serial, axfr_ok, status):
     sync_clr = OK if serial != "?" and status == "NOERROR" else (WARN if status == "UNREACHABLE" else FAIL)
