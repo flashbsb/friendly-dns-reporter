@@ -110,7 +110,7 @@
                 <p>Automated Diagnostics | Generated: {{ summary.timestamp }}</p>
             </div>
             <div style="text-align: right">
-                <div class="badge bg-info">Python Suite v4.1.0</div>
+                <div class="badge bg-info">Python Suite v5.0.0</div>
             </div>
         </div>
 
@@ -129,7 +129,7 @@
                     <tr>
                         <td class="label">Ping Avg</td>
                         <td>
-                            <span class="{{ 'val-ok' if data.ping == 'OK' else 'val-err' }}">{{ data.ping }}</span> ({{ data.latency|round(0) }}ms)
+                            <span class="{{ 'val-ok' if data.ping == 'OK' else 'val-err' }}">{{ data.ping }}</span> ({{ data.latency|default(0)|round(0) }}ms)
                             {% if data.ping_count and data.ping_count >= 3 and data.ping == 'OK' %}
                             <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">
                                 {{ (data.ping_count - (data.ping_count * data.packet_loss))|int }}/{{ data.ping_count }} recv ({{ (data.packet_loss * 100)|int }}% loss)
@@ -137,10 +137,11 @@
                             {% endif %}
                         </td>
                     </tr>
-                    <tr><td class="label">Port 53 (TCP)</td><td><span class="{{ 'val-ok' if data.port53 == 'OPEN' else 'val-err' }}">{{ data.port53 }}</span> ({{ data.port53_lat|round(0) }}ms)</td></tr>
-                    <tr><td class="label">Port 443 (TCP)</td><td><span class="{{ 'val-ok' if data.port443 == 'OPEN' else 'val-err' }}">{{ data.port443 }}</span> ({{ data.port443_lat|round(0) }}ms)</td></tr>
-                    <tr><td class="label">Recursion (UDP)</td><td><span class="{{ 'val-ok' if data.recursion == 'OPEN' else ('val-err' if data.recursion == 'UNREACHABLE' else ('val-warn' if data.recursion == 'TIMEOUT' else 'val-err')) }}">{{ data.recursion }}</span> ({{ data.recursion_lat|round(0) }}ms)</td></tr>
-                    <tr><td class="label">Version String</td><td><span class="{{ 'val-none' if data.version in ['UNREACHABLE', 'HIDDEN', 'TIMEOUT'] else 'val-ok' }}">{{ data.version }}</span> ({{ data.version_lat|round(0) }}ms)</td></tr>
+                    <tr><td class="label">Port 53 (UDP)</td><td><span class="{{ 'val-ok' if data.port53u_serv == 'OK' else 'val-err' }}">{{ data.port53u_serv }}</span> ({{ data.recursion_lat|default(0)|round(0) }}ms)</td></tr>
+                    <tr><td class="label">Port 53 (TCP)</td><td><span class="{{ 'val-ok' if data.port53t_serv == 'OK' else 'val-err' }}">{{ data.port53t_serv }}</span> ({{ data.port53t_lat|default(0)|round(0) }}ms)</td></tr>
+                    <tr><td class="label">Port 443 (DoH)</td><td><span class="{{ 'val-ok' if data.doh == 'OK' else 'val-err' }}">{{ data.doh }}</span> ({{ data.doh_lat|default(0)|round(0) }}ms)</td></tr>
+                    <tr><td class="label">Port 853 (DoT)</td><td><span class="{{ 'val-ok' if data.dot == 'OK' else 'val-err' }}">{{ data.dot }}</span> ({{ data.dot_lat|default(0)|round(0) }}ms)</td></tr>
+                    <tr><td class="label">Version String</td><td><span class="{{ 'val-none' if data.version in ['UNREACHABLE', 'HIDDEN', 'TIMEOUT'] else 'val-ok' }}">{{ data.version }}</span> ({{ data.version_lat|default(0)|round(0) }}ms)</td></tr>
                     <tr><td class="label">Groups</td><td>{{ data.groups }}</td></tr>
                     <tr><td class="label">DoH / DoT</td><td>{{ data.doh }} / {{ data.dot }}</td></tr>
                 </table>
@@ -182,7 +183,7 @@
                 <table class="stats-table">
                     <tr><td class="label">Server / Group</td><td>{{ result.server }} <span style="font-size:0.75rem">({{ result.group }})</span></td></tr>
                     <tr><td class="label">Consistency</td><td><span class="{{ 'val-ok' if result.internally_consistent == 'YES' else ('val-none' if result.internally_consistent == 'N/A' else 'val-err') }}">{{ result.internally_consistent }}</span></td></tr>
-                    <tr><td class="label">Latency</td><td>{{ result.latency|round(1) }}ms</td></tr>
+                    <tr><td class="label">Latency</td><td>{{ result.latency|default(0)|round(1) }}ms</td></tr>
                     {% if result.nsid %}<tr><td class="label">NSID</td><td>{{ result.nsid }}</td></tr>{% endif %}
                 </table>
                 <div class="answers-box">

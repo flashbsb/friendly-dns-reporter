@@ -34,6 +34,10 @@ class Settings:
     def sleep_time(self):
         return self.get_float("GENERAL", "SLEEP", 0.01)
 
+    @property
+    def only_test_active_groups(self):
+        return self.get_bool("GENERAL", "ONLY_TEST_ACTIVE_GROUPS", True)
+
     # --- REPORTS ---
     @property
     def log_dir(self):
@@ -51,14 +55,14 @@ class Settings:
     def enable_csv_report(self):
         return self.get_bool("REPORTS", "ENABLE_CSV_REPORT", True)
 
-    # --- DIG OPTIONS (Legacy Mapping) ---
+    # --- DNS ENGINE ---
     @property
-    def dig_timeout(self):
-        return self.get_int("DIG_OPTIONS", "DIG_TIMEOUT", 1)
+    def dns_timeout(self):
+        return self.get_int("DNS_ENGINE", "DNS_TIMEOUT", 1)
 
     @property
-    def dig_tries(self):
-        return self.get_int("DIG_OPTIONS", "DIG_TRIES", 1)
+    def dns_retries(self):
+        return self.get_int("DNS_ENGINE", "DNS_RETRIES", 1)
 
     # --- PHASES ---
     @property
@@ -81,6 +85,10 @@ class Settings:
     @property
     def ping_count(self):
         return self.get_int("CONNECTIVITY", "PING_COUNT", 3)
+
+    @property
+    def ping_timeout(self):
+        return self.get_float("CONNECTIVITY", "PING_TIMEOUT", 2.0)
 
     @property
     def ping_latency_warn(self):
@@ -106,17 +114,6 @@ class Settings:
     def soa_latency_crit(self):
         return int(self.config.get('CONNECTIVITY', 'SOA_LATENCY_CRIT', fallback=1500))
 
-    @property
-    def enable_trace(self):
-        return self.get_bool("CONNECTIVITY", "ENABLE_TRACE", False)
-
-    @property
-    def trace_max_hops(self):
-        return self.get_int("CONNECTIVITY", "TRACE_MAX_HOPS", 15)
-
-    @property
-    def enable_tcp_check(self):
-        return self.get_bool("CONNECTIVITY", "ENABLE_TCP_CHECK", True)
 
     # --- ADVANCED CHECKS ---
     @property
@@ -154,16 +151,9 @@ class Settings:
         return [g.strip().upper() for g in val.split(',') if g.strip()]
 
     @property
-    def enable_soa_serial_check(self):
-        return self.get_bool("ZONE_TESTS", "ENABLE_SOA_SERIAL_CHECK", True)
-
-    @property
-    def enable_soa_timer_audit(self):
-        return self.get_bool("ZONE_TESTS", "ENABLE_SOA_TIMER_AUDIT", True)
-
-    @property
-    def enable_zone_dnssec_check(self):
-        return self.get_bool("ZONE_TESTS", "ENABLE_ZONE_DNSSEC_CHECK", True)
+    def enable_soa_serial_sync(self):
+        # We use a simpler serial check in Zone phase
+        return True
 
     @property
     def enable_web_risk_check(self):

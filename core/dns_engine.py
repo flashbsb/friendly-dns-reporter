@@ -187,20 +187,20 @@ class DNSEngine:
             return "HIDDEN", 0
 
     def check_dot(self, server):
-        """Check if server supports DoT. Returns (True/False/None, latency)."""
+        """Check if server supports DoT. Returns (StatusString, latency)."""
         start = time.time()
         try:
             query = dns.message.make_query("google.com", "A")
             dns.query.tls(query, server, timeout=self.timeout)
             latency = (time.time() - start) * 1000
-            return True, latency
+            return "OK", latency
         except dns.exception.Timeout:
-            return None, self.timeout * 1000
+            return "TIMEOUT", self.timeout * 1000
         except:
-            return False, 0
+            return "FAIL", 0
 
     def check_doh(self, server):
-        """Check if server supports DoH. Returns (True/False/None, latency)."""
+        """Check if server supports DoH. Returns (StatusString, latency)."""
         import requests
         start = time.time()
         try:
@@ -212,12 +212,25 @@ class DNSEngine:
             response = requests.post(url, data=wire_query, headers=headers, timeout=self.timeout, verify=False)
             latency = (time.time() - start) * 1000
             if response.status_code == 200:
-                return True, latency
-            return False, 0
+                return "OK", latency
+            return "FAIL", 0
         except requests.exceptions.Timeout:
-            return None, self.timeout * 1000
+            return "TIMEOUT", self.timeout * 1000
         except:
-            return False, 0
+            return "FAIL", 0
+
+    def check_tcp(self, server):
+        """Perform a real DNS query over TCP. Returns (StatusString, latency)."""
+        start = time.time()
+        try:
+            query = dns.message.make_query("google.com", "A")
+            dns.query.tcp(query, server, timeout=self.timeout)
+            latency = (time.time() - start) * 1000
+            return "OK", latency
+        except dns.exception.Timeout:
+            return "TIMEOUT", self.timeout * 1000
+        except:
+            return "FAIL", 0
 
     def check_zone_dnssec(self, server, domain):
         """Verify if a specific zone is signed (contains DNSKEY and RRSIG)."""

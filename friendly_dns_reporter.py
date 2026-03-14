@@ -5,7 +5,7 @@
 =============================================================================
 FRIENDLY DNS REPORTER - PYTHON EDITION
 =============================================================================
-Version: 4.1.0
+Version: 5.0.0
 Author: flashbsb
 Description: 3-Phase Automated DNS diagnostics for Windows and Linux.
 =============================================================================
@@ -131,27 +131,29 @@ def run_phase1_infrastructure(servers, srv_groups, conn, dns_engine, settings, l
         ping_res = conn.ping(srv, count=settings.ping_count) if settings.enable_ping else {"is_alive": True}
         res["ping"] = "OK" if ping_res.get("is_alive") else "FAIL"
         res["latency"] = ping_res.get("avg_rtt", 0)
-        res["packet_loss"] = ping_res.get("packet_loss", 0.0) # icmplib returns decimal (e.g., 0.33 for 33%)
+        res["packet_loss"] = ping_res.get("packet_loss", 0.0)
         res["ping_count"] = settings.ping_count 
         res["ping_latency_warn"] = settings.ping_latency_warn
         res["ping_latency_crit"] = settings.ping_latency_crit
         res["ping_loss_warn"] = settings.ping_loss_warn
         res["ping_loss_crit"] = settings.ping_loss_crit
         
-        # Ports (TCP)
-        p53_tcp, p53_lat = conn.check_port(srv, 53)
-        res["port53"] = "OPEN" if p53_tcp else "CLOSED"
-        res["port53_lat"] = p53_lat
+        # 2. Deep Service Probes (Port vs. Service)
         
-        p443_tcp, p443_lat = conn.check_port(srv, 443)
-        res["port443"] = "OPEN" if p443_tcp else "CLOSED"
-        res["port443_lat"] = p443_lat
+        # UDP 53 (Pre-calculated via Version/Recursion)
+        res["port53u"] = "OPEN" # UDP always assumed open if we try it, but we'll validate service below
         
-        p853_tcp, p853_lat = conn.check_port(srv, 853)
-        res["port853"] = "OPEN" if p853_tcp else "CLOSED"
-        res["port853_lat"] = p853_lat
-        
-        # 2. DNS-Dependent Checks (UDP)
+        # TCP 53
+        p53t_open, p53t_lat = conn.check_port(srv, 53)
+        res["port53t"] = "OPEN" if p53t_open else "CLOSED"
+        res["port53t_serv"] = "N/A"
+        if p53t_open:
+            st, lat = dns_engine.check_tcp(srv)
+            res["port53t_serv"] = st
+            if st == "OK": p53t_lat = lat
+        res["port53t_lat"] = p53t_lat
+
+        # 3. DNS-Dependent Checks (UDP)
         v, v_lat = dns_engine.query_version(srv) if settings.check_bind_version else ("DISABLED", 0)
         res["version"] = v if v is not None else "TIMEOUT"
         res["version_lat"] = v_lat
@@ -160,28 +162,46 @@ def run_phase1_infrastructure(servers, srv_groups, conn, dns_engine, settings, l
         res["recursion"] = "OPEN" if r is True else ("CLOSED" if r is False else "TIMEOUT")
         res["recursion_lat"] = r_lat
         
-        # Circuit Breaker Logic: SERVER IS DEAD only if ALL channels fail
-        dns_udp_works = res["version"] not in ["TIMEOUT", "UNREACHABLE", "DISABLED"] or \
-                        res["recursion"] not in ["TIMEOUT", "UNREACHABLE", "DISABLED"]
+        # Service Validation for UDP 53
+        udp_serv_ok = res["version"] not in ["TIMEOUT", "UNREACHABLE", "DISABLED"] or \
+                      res["recursion"] not in ["TIMEOUT", "UNREACHABLE", "DISABLED"]
+        res["port53u_serv"] = "OK" if udp_serv_ok else ("TIMEOUT" if (res["version"] == "TIMEOUT" or res["recursion"] == "TIMEOUT") else "FAIL")
         
-        if res["ping"] == "FAIL" and not p53_tcp and not dns_udp_works and res["port443"] == "CLOSED":
+        # Circuit Breaker Logic: SERVER IS DEAD only if PORT and SERVICE fail across the board
+        is_alive = (res["ping"] == "OK") or udp_serv_ok or (res["port53t_serv"] == "OK")
+        
+        if not is_alive:
             res["is_dead"] = True
-            res["version"] = "UNREACHABLE"
-            res["recursion"] = "UNREACHABLE"
-            res["dot"] = "UNREACHABLE"
-            res["doh"] = "UNREACHABLE"
-            res["dnssec"] = "UNREACHABLE"
-            res["edns0"] = "UNREACHABLE"
-            res["open_resolver"] = "UNREACHABLE"
+            for field in ["version", "recursion", "dot", "doh", "dnssec", "edns0", "open_resolver"]:
+                 res[field] = "UNREACHABLE"
+            res["port53t_serv"] = "FAIL"
+            res["port853_serv"] = "FAIL"
+            res["port443_serv"] = "FAIL"
         else:
             # Protocols (DoT/DoH)
-            dot, dot_lat = dns_engine.check_dot(srv) if settings.enable_dot_check else (False, 0)
-            res["dot"] = "YES" if dot is True else ("NO" if dot is False else "TIMEOUT")
-            res["dot_lat"] = dot_lat
-            
-            doh, doh_lat = dns_engine.check_doh(srv) if settings.enable_doh_check else (False, 0)
-            res["doh"] = "YES" if doh is True else ("NO" if doh is False else "TIMEOUT")
-            res["doh_lat"] = doh_lat
+            p853_open, p853_slat = conn.check_port(srv, 853)
+            res["port853"] = "OPEN" if p853_open else "CLOSED"
+            res["port853_serv"] = "FAIL"
+            if p853_open:
+                dot_st, dot_lat = dns_engine.check_dot(srv) if settings.enable_dot_check else ("DISABLED", 0)
+                res["dot"] = dot_st
+                res["dot_lat"] = dot_lat
+                res["port853_serv"] = dot_st
+            else:
+                res["dot"] = "NO"
+                res["dot_lat"] = 0
+
+            p443_open, p443_slat = conn.check_port(srv, 443)
+            res["port443"] = "OPEN" if p443_open else "CLOSED"
+            res["port443_serv"] = "FAIL"
+            if p443_open:
+                doh_st, doh_lat = dns_engine.check_doh(srv) if settings.enable_doh_check else ("DISABLED", 0)
+                res["doh"] = doh_st
+                res["doh_lat"] = doh_lat
+                res["port443_serv"] = doh_st
+            else:
+                res["doh"] = "NO"
+                res["doh_lat"] = 0
             
             # Advanced Infrastructure Checks
             dnssec, dsec_lat = dns_engine.check_dnssec(srv) if settings.enable_dnssec_check else (False, 0)
@@ -196,7 +216,7 @@ def run_phase1_infrastructure(servers, srv_groups, conn, dns_engine, settings, l
             res["open_resolver"] = opn_st
             res["open_resolver_lat"] = opn_lat
         
-        res["trace"] = conn.traceroute(srv, max_hops=settings.trace_max_hops) if settings.enable_trace else None
+        # Traceroute removed as requested (unused in UI)
         
         with lock:
             infra_results[srv] = res
@@ -273,7 +293,7 @@ def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache,
             dnssec_status.append(is_signed)
             
             # Web Risk Check
-            risks = dns_engine.check_web_risk(srv) if settings.enable_web_risk_check else []
+            risks = [] # Web Risk check removed (silent feature)
             web_risks[srv] = risks
 
             # NS Check
@@ -521,13 +541,25 @@ def main():
     script_start_time = time.time()
     settings = Settings()
     
-    parser = argparse.ArgumentParser(description="FriendlyDNSReporter - Professional Suite (v4.1.0)")
+    parser = argparse.ArgumentParser(description="FriendlyDNSReporter - Professional Suite (v5.0.0)")
     parser.add_argument("-n", "--domains", default=os.path.join("config", "domains.csv"), help="Domains CSV")
     parser.add_argument("-g", "--groups", default=os.path.join("config", "groups.csv"), help="Groups CSV")
     parser.add_argument("-o", "--output", default=settings.log_dir, help="Output DIR")
+    parser.add_argument("-p", "--phases", help="Select phases to run (e.g. 1,3 or 2)")
     args = parser.parse_args()
     
-    ui.print_banner("v4.1.0")
+    # Process phase selection
+    run_p1 = settings.enable_phase_server
+    run_p2 = settings.enable_phase_zone
+    run_p3 = settings.enable_phase_record
+    
+    if args.phases:
+        selected = [p.strip() for p in args.phases.split(',')]
+        run_p1 = "1" in selected
+        run_p2 = "2" in selected
+        run_p3 = "3" in selected
+
+    ui.print_banner("v5.0.0")
     ui.print_header(settings.max_threads, settings.consistency_checks, os.path.basename(args.domains))
     
     domains_raw, dns_groups = load_datasets(args.domains, args.groups)
@@ -535,7 +567,7 @@ def main():
         print(f"[{ui.FAIL}ERROR{ui.RESET}] Datasets missing/empty.")
         sys.exit(1)
 
-    dns_engine = DNSEngine(timeout=settings.timeout, tries=settings.dig_tries)
+    dns_engine = DNSEngine(timeout=settings.dns_timeout, tries=settings.dns_retries)
     conn = Connectivity(timeout=settings.timeout)
     lock = threading.Lock()
     
@@ -545,11 +577,12 @@ def main():
         for group in (entry.get('GROUPS') or '').split(','):
             active_groups.add(group.strip())
             
-    # Collect only servers from active groups and create a reverse mapping
+    # Collect servers and create a reverse mapping
     all_servers = set()
     srv_to_groups = {}
     for group, srvs in dns_groups.items():
-        if group in active_groups:
+        # Only process if it's an active group OR if filtering is disabled
+        if not settings.only_test_active_groups or group in active_groups:
             all_servers.update(srvs)
             for s in srvs:
                 if s not in srv_to_groups: srv_to_groups[s] = []
@@ -564,17 +597,17 @@ def main():
         sys.exit(1)
     
     infra_cache = {}
-    if settings.enable_phase_server:
+    if run_p1:
         ui.print_phase("1: Server Infrastructure")
         infra_cache = run_phase1_infrastructure(all_servers, srv_to_groups, conn, dns_engine, settings, lock)
     
     zone_results = []
-    if settings.enable_phase_zone:
+    if run_p2:
         ui.print_phase("2: Zone Integrity")
         zone_results = run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache, lock)
     
     results = []
-    if settings.enable_phase_record:
+    if run_p3:
         ui.print_phase("3: Record Consistency")
         tasks = []
         for entry in domains_raw:

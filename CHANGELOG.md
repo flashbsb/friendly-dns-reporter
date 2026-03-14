@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [5.0.0] - 2026-03-14
+### Added
+- **Deep Service Validation**: Phase 1 now distinguishes between a port being "open" (socket) and the service being "functional" (responding to real DNS queries).
+- **Hybrid Status Notation**: New UI indicators: `OK` (Port+Service up), `P_ONLY` (Port up, Service down), `CLOSE` (Port closed).
+- **CLI Phase Selection**: Added `-p` / `--phases` argument (e.g., `-p 1,3`) to run specific diagnostic stages.
+- **Architecture Circuit Breaker**: Phase 1 results now act as an intelligent gatekeeper for Phase 2 and 3, preventing timeouts on dead services.
+
+### Changed
+- **Phase 1 UI Reordering**: Reordered columns to `Group | IP Address` for better readability as requested.
+- **DNS Engine Expansion**: Added protocol-specific deep probing for UDP, TCP, DoT, and DoH.
+- **Settings Sanitization**: Renamed `[DIG_OPTIONS]` to `[DNS_ENGINE]` and variables to `DNS_TIMEOUT`/`DNS_RETRIES` to align with the Python-native architecture.
+
 ## [4.1.0] - 2026-03-14
 ### Added
 - **Phase 3 Performance Visualization**: Latency column is now colorized (Green/Yellow/Red) based on thresholds.
