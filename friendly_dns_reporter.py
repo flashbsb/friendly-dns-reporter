@@ -5,7 +5,7 @@
 =============================================================================
 FRIENDLY DNS REPORTER - PYTHON EDITION
 =============================================================================
-Version: 2.9.7
+Version: 4.1.0
 Author: flashbsb
 Description: 3-Phase Automated DNS diagnostics for Windows and Linux.
 =============================================================================
@@ -60,6 +60,7 @@ from core.connectivity import Connectivity
 from core.reporting import Reporter
 from core.config_loader import Settings
 import core.ui as ui
+import core.validators as validators
 
 # Silence DoH/DoT HTTPS warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -238,12 +239,16 @@ def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache,
     def _check_zone(domain, servers):
         results = []
         serials = {}
+        timers_list = []
+        dnssec_status = []
+        web_risks = {}
+        mname_target = None
+
         for srv in servers:
             infra = infra_cache.get(srv, {})
             if infra.get("is_dead"):
                 res = {"domain": domain, "server": srv, "serial": "N/A", "axfr_vulnerable": False, "axfr_detail": "PH1 FAIL", "status": "UNREACHABLE"}
                 results.append(res); serials[srv] = "N/A"
-                with lock: ui.print_zone_detail(srv, domain, "N/A", False, "UNREACHABLE")
                 continue
 
             soa = dns_engine.query(srv, domain, "SOA")
@@ -253,14 +258,31 @@ def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache,
             mname = ans[0] if len(ans) > 0 else "N/A"
             rname = ans[1] if len(ans) > 1 else "N/A"
             
+            # SOA Timers (Refresh, Retry, Expire, MinTTL)
+            if len(ans) >= 7 and settings.enable_soa_timer_audit:
+                try:
+                    t_ref, t_ret, t_exp, t_min = int(ans[3]), int(ans[4]), int(ans[5]), int(ans[6])
+                    timers_list.append((t_ref, t_ret, t_exp, t_min))
+                except: pass
+            
             aa = soa.get('aa', False)
             latency = soa.get('latency', 0)
             
+            # DNSSEC Check
+            is_signed = dns_engine.check_zone_dnssec(srv, domain) if settings.enable_zone_dnssec_check else False
+            dnssec_status.append(is_signed)
+            
+            # Web Risk Check
+            risks = dns_engine.check_web_risk(srv) if settings.enable_web_risk_check else []
+            web_risks[srv] = risks
+
             # NS Check
             ns_q = dns_engine.query(srv, domain, "NS")
             ns_list = sorted([a.lower().rstrip('.') for a in ns_q['answers']]) if ns_q['status'] == "NOERROR" else []
             
             serials[srv] = serial
+            if mname != "N/A": mname_target = mname
+            
             axfr_ok, axfr_msg = dns_engine.check_axfr(srv, domain) if settings.enable_axfr_check else (False, "DISABLED")
             
             res = {
@@ -270,18 +292,57 @@ def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache,
                 "aa": aa, "latency": latency, "ns_list": ns_list,
                 "soa_latency_warn": settings.soa_latency_warn,
                 "soa_latency_crit": settings.soa_latency_crit,
-                "axfr_allowed_groups": settings.axfr_allowed_groups
+                "axfr_allowed_groups": settings.axfr_allowed_groups,
+                "web_risks": risks,
+                "dnssec": is_signed
             }
             results.append(res)
-            # with lock: ui.print_zone_detail(srv, domain, res) # No longer printing immediate
             
         is_synced = len(set(s for s in serials.values() if s != "N/A")) <= 1
         ns_lists = [r['ns_list'] for r in results if r['status'] == "NOERROR"]
         ns_consistent = len(set(tuple(l) for l in ns_lists)) <= 1 if ns_lists else True
         
+        # ZONE AUDIT LOGIC
+        audit = {
+            "dnssec": any(dnssec_status),
+            "timers_ok": True, "timers_issues": [],
+            "mname_reachable": None, "glue_ok": True,
+            "web_risk": any(r for r in web_risks.values())
+        }
+        
+        if timers_list and settings.enable_soa_timer_audit:
+            # Check consistency of timers across servers
+            if len(set(timers_list)) > 1:
+                audit["timers_ok"] = False
+                audit["timers_issues"].append("Inconsistent timers across servers")
+            
+            # RFC 1912 Analysis (use first set if consistent)
+            ref, ret, exp, mn = timers_list[0]
+            rfc_ok, rfc_issues = dns_engine.analyze_soa_timers(ref, ret, exp, mn)
+            if not rfc_ok:
+                audit["timers_ok"] = False
+                audit["timers_issues"].extend(rfc_issues)
+
+        if mname_target:
+            # Check if MNAME matches any server we just tested
+            for r in results:
+                # This is a bit simplistic (name vs IP), but good for internal audits
+                if mname_target.lower().rstrip('.') in r['server'] or mname_target.lower().rstrip('.') in r['mname']:
+                     if r['status'] == "NOERROR":
+                         audit["mname_reachable"] = f"{r['server']} (UP)"
+                         break
+            if not audit["mname_reachable"]:
+                audit["mname_reachable"] = f"{mname_target} (UNKNOWN)"
+
+        # Glue Consistency (Placeholder for now as it requires more queries)
+        
+        # Attach audit data to results so UI can print it once
+        for r in results:
+            r["zone_audit"] = audit
+            r["zone_is_synced"] = is_synced
+            r["ns_consistent"] = ns_consistent
+
         with lock:
-            # if not ns_consistent:
-            #    ui.print_warning(f"  [!] NS Inconsistency detected in zone: {domain}")
             zone_results.extend(results)
             counters['done'] += 1
             ui.print_progress(counters['done'], total, "Checking Zones")
@@ -297,22 +358,22 @@ def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache,
     ui.print_phase_header("2: Zone Integrity")
     last_domain = None
     sorted_zones = sorted(zone_results, key=lambda x: (x['domain'], x['server']))
-    for res in sorted_zones:
+    for i, res in enumerate(sorted_zones):
         # Check for NS inconsistency and Zone Sync per domain (printed once)
         if res['domain'] != last_domain:
-            dom_results = [r for r in sorted_zones if r['domain'] == res['domain']]
-            dom_ns_lists = [r['ns_list'] for r in dom_results if r['status'] == "NOERROR"]
-            if dom_ns_lists and len(set(tuple(l) for l in dom_ns_lists)) > 1:
-                ui.print_warning(f"  [!] NS Inconsistency detected in zone: {res['domain']}")
-            
-            # Zone-wide sync check
-            dom_serials = [r['serial'] for r in dom_results if r['serial'] != "N/A" and r['serial'] != "?"]
-            zone_is_synced = len(set(dom_serials)) <= 1 if dom_serials else True
-            for r in dom_results: r['zone_is_synced'] = zone_is_synced
-            
+            if last_domain is not None:
+                # Print audit block for the PREVIOUS domain
+                prev_res = sorted_zones[i-1]
+                ui.print_zone_audit_block(last_domain, prev_res.get('zone_audit', {}))
+
             last_domain = res['domain']
             
         ui.print_zone_detail(res['server'], res['domain'], res)
+    
+    # Print audit block for the LAST domain
+    if sorted_zones:
+        last_res = sorted_zones[-1]
+        ui.print_zone_audit_block(last_res['domain'], last_res.get('zone_audit', {}))
         
     # Phase Summary
     vuln = sum(1 for r in zone_results if r['axfr_vulnerable'])
@@ -331,6 +392,9 @@ def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache,
 def run_phase3_records(tasks, dns_engine, settings, infra_cache, results, lock):
     """Phase 3: Parallel Record Consistency Check."""
     phase_start_time = time.time()
+    counters = {'done': 0}
+    total = len(tasks)
+    
     def _worker(target, group_name, server, record_types):
         # Circuit Breaker
         infra = infra_cache.get(server, {})
@@ -339,11 +403,13 @@ def run_phase3_records(tasks, dns_engine, settings, infra_cache, results, lock):
                 "domain": target, "group": group_name, "server": server, "type": rtype,
                 "status": "UNREACHABLE", "latency": 0, "ping": "FAIL", "port53": "CLOSED",
                 "version": "DEAD", "recursion": "DEAD", "dot": "DEAD", "doh": "DEAD",
-                "nsid": None, "internally_consistent": "N/A", "answers": "SKIPPED: SERVER DOWN"
+                "nsid": None, "internally_consistent": "N/A", "answers": "SKIPPED: SERVER DOWN",
+                "is_consistent": True
             } for rtype in record_types if rtype.strip()]
             with lock:
                 results.extend(local_res)
-                for r in local_res: print(ui.format_result(group_name, target, server, r['type'], "UNREACHABLE", 0, True))
+                counters['done'] += 1
+                ui.print_progress(counters['done'], total, "Record Consistency")
             return
 
         local_res = []
@@ -360,6 +426,39 @@ def run_phase3_records(tasks, dns_engine, settings, infra_cache, results, lock):
             is_consistent = compare_consistency(queries, settings)
             main_q = queries[0]
             
+            # SEMANTIC AUDIT (v4.0.0)
+            findings = []
+            
+            # 1. TTL Analysis
+            ttl_ok, ttl_msg = validators.analyze_ttl(main_q.get('ttl', 0))
+            if not ttl_ok: findings.append(ttl_msg)
+            
+            # 2. Record Specific Syntax/Chain checks
+            spf_list = [a for a in main_q['answers'] if rtype == "TXT" and "v=spf1" in a]
+            dmarc_list = [a for a in main_q['answers'] if rtype == "TXT" and "v=DMARC1" in a]
+            
+            if spf_list:
+                _, spf_issues = validators.validate_spf(spf_list)
+                findings.extend(spf_issues)
+                
+            if dmarc_list:
+                _, dmarc_issues = validators.validate_dmarc(dmarc_list)
+                findings.extend(dmarc_issues)
+
+            for ans in main_q['answers']:
+                # Dangling DNS (CNAME / MX)
+                if rtype in ["CNAME", "MX"]:
+                    # Extract target (MX has priority first)
+                    target_host = ans.split(' ')[1] if rtype == "MX" else ans.rstrip('.')
+                    chain_ok, chain_msg = dns_engine.resolve_chain(server, target_host, rtype)
+                    if not chain_ok:
+                        findings.append(f"Dangling {rtype} target: {target_host} ({chain_msg})")
+                    else:
+                        # MX Target Port 25 Check
+                        if rtype == "MX":
+                             if not dns_engine.check_port_25(target_host):
+                                 findings.append(f"MX Target {target_host} UNREACHABLE on Port 25 (SMTP)")
+
             entry = {
                 "domain": target, "group": group_name, "server": server, "type": rtype,
                 "status": main_q['status'], "latency": main_q['latency'],
@@ -367,23 +466,50 @@ def run_phase3_records(tasks, dns_engine, settings, infra_cache, results, lock):
                 "version": infra.get("version", "N/A"), "recursion": infra.get("recursion", "N/A"),
                 "dot": infra.get("dot", "N/A"), "doh": infra.get("doh", "N/A"),
                 "nsid": main_q.get("nsid"), "internally_consistent": "YES" if is_consistent else "DIV!",
-                "answers": ", ".join(main_q['answers'])
+                "answers": ", ".join(main_q['answers']),
+                "is_consistent": is_consistent,
+                "findings": findings
             }
             local_res.append(entry)
-            with lock:
-                print(ui.format_result(group_name, target, server, rtype, main_q['status'], main_q['latency'], is_consistent))
         
         with lock:
             results.extend(local_res)
-            # counters['done'] += 1
-            # ui.print_progress(counters['done'], total, "Record Consistency")
+            counters['done'] += 1
+            ui.print_progress(counters['done'], total, "Record Consistency")
 
-    # counters = {'done': 0}
-    # total = len(tasks)
-    ui.print_phase_header("3: Record Consistency")
+    counters = {'done': 0}
+    total = len(tasks)
+    
     with concurrent.futures.ThreadPoolExecutor(max_workers=settings.max_threads) as executor:
         futures = [executor.submit(_worker, *t) for t in tasks]
         concurrent.futures.wait(futures)
+
+    # Post-collection sorting and printing
+    ui.print_phase_header("3: Record Consistency")
+    
+    # Sort results
+    sorted_results = sorted(results, key=lambda x: (x['domain'], x['group'], x['server']))
+    
+    last_zone_srv = None # (domain, server) pair
+    
+    for r in sorted_results:
+        print(ui.format_result(
+            r['domain'], r['group'], r['server'], r['type'], r['status'], r['latency'], r['is_consistent'],
+            warn_ms=settings.rec_latency_warn, crit_ms=settings.rec_latency_crit
+        ))
+        
+        # Print semantic findings
+        if r.get('findings'):
+            ui.print_record_findings(r['findings'])
+            
+        # Optional: Wildcard detection per (domain, server)
+        # We only do it once per (zone, server) to avoid spam
+        current_zone_srv = (r['domain'], r['server'])
+        if current_zone_srv != last_zone_srv and r['status'] == "NOERROR":
+            has_wc, wc_ans = dns_engine.detect_wildcard(r['server'], r['domain'])
+            if has_wc:
+                ui.print_record_findings([f"Wildcard detection triggered! Zone resolves any sub-subdomain to: {wc_ans}"])
+            last_zone_srv = current_zone_srv
     
     # Phase Summary
     succ = sum(1 for r in results if r['status'] == "NOERROR")
@@ -395,13 +521,13 @@ def main():
     script_start_time = time.time()
     settings = Settings()
     
-    parser = argparse.ArgumentParser(description="FriendlyDNSReporter - Professional Suite (v2.9.7)")
+    parser = argparse.ArgumentParser(description="FriendlyDNSReporter - Professional Suite (v4.1.0)")
     parser.add_argument("-n", "--domains", default=os.path.join("config", "domains.csv"), help="Domains CSV")
     parser.add_argument("-g", "--groups", default=os.path.join("config", "groups.csv"), help="Groups CSV")
     parser.add_argument("-o", "--output", default=settings.log_dir, help="Output DIR")
     args = parser.parse_args()
     
-    ui.print_banner("v2.9.7")
+    ui.print_banner("v4.1.0")
     ui.print_header(settings.max_threads, settings.consistency_checks, os.path.basename(args.domains))
     
     domains_raw, dns_groups = load_datasets(args.domains, args.groups)

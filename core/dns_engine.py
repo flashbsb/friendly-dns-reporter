@@ -3,9 +3,11 @@ import dns.query
 import dns.message
 import dns.rcode
 import dns.exception
+import dns.flags
 import dns.zone
 import dns.edns
 import time
+import socket
 
 class DNSEngine:
     def __init__(self, timeout=2.0, tries=1):
@@ -57,6 +59,11 @@ class DNSEngine:
                             else:
                                 nsid = str(opt)
 
+                # Extract TTL from answer
+                ttl = 0
+                if response.answer:
+                    ttl = response.answer[0].ttl
+
                 return {
                     "status": status,
                     "latency": latency,
@@ -64,6 +71,7 @@ class DNSEngine:
                     "aa": bool(response.flags & dns.flags.AA),
                     "answers": sorted(answers),
                     "nsid": nsid,
+                    "ttl": ttl,
                     "full_response": response.to_text()
                 }
             except dns.exception.Timeout as e:
@@ -210,3 +218,79 @@ class DNSEngine:
             return None, self.timeout * 1000
         except:
             return False, 0
+
+    def check_zone_dnssec(self, server, domain):
+        """Verify if a specific zone is signed (contains DNSKEY and RRSIG)."""
+        try:
+            query = dns.message.make_query(domain, "DNSKEY", want_dnssec=True)
+            response = dns.query.udp(query, server, timeout=self.timeout)
+            
+            has_dnskey = any(rrset.rdtype == dns.rdatatype.DNSKEY for rrset in response.answer)
+            has_rrsig = any(rrset.rdtype == dns.rdatatype.RRSIG for rrset in response.answer)
+            
+            return has_dnskey and has_rrsig
+        except:
+            return False
+
+    def analyze_soa_timers(self, refresh, retry, expire, minimum):
+        """Validate SOA timers against RFC 1912 best practices."""
+        # RFC 1912 / Common Best Practices:
+        # Refresh: 20 min to 12 hours (1200 - 43200)
+        # Retry: 2 min to 2 hours (120 - 7200)
+        # Expire: 2 to 4 weeks (1209600 - 2419200)
+        # Min TTL: 3 min to 1 day (180 - 86400)
+        
+        issues = []
+        if not (1200 <= refresh <= 43200): issues.append(f"Refresh({refresh}) out of RFC range")
+        if not (120 <= retry <= 7200): issues.append(f"Retry({retry}) out of RFC range")
+        if retry >= refresh: issues.append("Retry >= Refresh")
+        if not (1209600 <= expire <= 2419200): issues.append(f"Expire({expire}) out of RFC range")
+        if not (180 <= minimum <= 86400): issues.append(f"MinTTL({minimum}) out of RFC range")
+        
+        return len(issues) == 0, issues
+
+    def check_web_risk(self, server):
+        """Check if ports 80 or 443 are open on the DNS server (Web Exposure Risk)."""
+        risks = []
+        for port in [80, 443]:
+            try:
+                with socket.create_connection((server, port), timeout=1.0):
+                    risks.append(port)
+            except:
+                continue
+        return risks
+
+    def resolve_chain(self, server, target, rtype):
+        """Verify if a CNAME or MX target actually resolves to an IP (Dangling DNS check)."""
+        try:
+            # Simple check: see if the target resolves to an A record
+            res = self.query(server, target, "A")
+            if res['status'] == "NOERROR" and res['answers']:
+                return True, "RESOLVES"
+            if res['status'] == "NXDOMAIN":
+                return False, "NXDOMAIN (Dangling!)"
+            return False, f"STATUS: {res['status']}"
+        except:
+            return False, "ERROR"
+
+    def check_port_25(self, server):
+        """Check if SMTP port 25 is open on a target (MX Reachability)."""
+        try:
+            with socket.create_connection((server, 25), timeout=2.0):
+                return True
+        except:
+            return False
+
+    def detect_wildcard(self, server, domain):
+        """Check if zone has a wildcard entry by querying a random sub-subdomain."""
+        import random
+        import string
+        rand_prefix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=12))
+        test_domain = f"{rand_prefix}.{domain}"
+        try:
+            res = self.query(server, test_domain, "A")
+            if res['status'] == "NOERROR" and res['answers']:
+                return True, res['answers']
+            return False, None
+        except:
+            return False, None

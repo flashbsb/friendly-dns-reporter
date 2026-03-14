@@ -31,8 +31,8 @@ def print_phase_header(name):
         print(f"  {'Domain':25} -> {'Server':15} | {'Group':11} | {'SOA Serial':18} | {'Lat':7} | {'AA':4} | AXFR Status")
         print("-" * 114)
     elif "3" in name:
-        print(f"  {'Group':10} | {'Target':30} -> {'Server':15} | {'Type':5} | {'Status':12}")
-        print("-" * 105)
+        print(f"  {'Domain':30} | {'Group':11} | {'Server':15} | {'Type':5} | {'Status':12} | {'Lat':7} | Sync")
+        print("-" * 115)
 
 def print_summary_table(total, success, fail, div, sync_issues, reports, duration: float = 0.0):
     print("\n" + "=" * 80)
@@ -48,6 +48,10 @@ def print_summary_table(total, success, fail, div, sync_issues, reports, duratio
     print(f"  Reports Generated:")
     for label, path in reports.items():
         print(f"  {INFO}{label:5}:{RESET} {path}")
+    print("-" * 80)
+    print(f"  {INFO}Check for updates & Contribute:{RESET}")
+    print(f"  https://github.com/flashbsb/friendly_dns_reporter")
+    print("=" * 80)
     print("=" * 80 + "\n")
 
 def print_interrupt():
@@ -190,6 +194,35 @@ def print_zone_detail(srv, domain, res):
 
     print(f"  {domain:25} -> {srv:15} | {INFO}{group_str:11}{RESET} | {serial_str:18} | {lat_str} | {aa_str} | {axfr_clr}{axfr_str:18}{RESET}")
 
+def print_zone_audit_block(domain, audit):
+    """Print a concise summary of advanced zone diagnostics."""
+    print(f"  {INFO}>> 🔍 [ZONE AUDIT: {domain}]{RESET}")
+    
+    # DNSSEC
+    sec_str = f"{OK}SIGNED{RESET}" if audit.get("dnssec") else f"{WARN}UNSIGNED{RESET}"
+    
+    # Timers
+    t_ok = audit.get("timers_ok", True)
+    tim_str = f"{OK}RFC-OK{RESET}" if t_ok else f"{FAIL}NON-COMPLIANT{RESET}"
+    
+    # MNAME (Optional)
+    m_reach = audit.get("mname_reachable")
+    m_str = ""
+    if m_reach:
+        m_clr = OK if m_reach == "UP" else (FAIL if m_reach == "DOWN" else WARN)
+        m_str = f" [MNAME: {m_clr}{m_reach}{RESET}]"
+        
+    # Web Risk
+    w_risk = audit.get("web_risk", False)
+    web_str = f"{FAIL}EXPOSED!{RESET}" if w_risk else f"{OK}SAFE{RESET}"
+    
+    print(f"     [DNSSEC: {sec_str}] [TIMERS: {tim_str}]{m_str} [WEB-RISK: {web_str}]")
+    
+    if not t_ok and audit.get("timers_issues"):
+        for issue in audit["timers_issues"]:
+            print(f"       {WARN}! {issue}{RESET}")
+    print("") # Spacer
+
 def print_warning(msg):
     print(f"  {WARN}{msg}{RESET}")
 
@@ -201,7 +234,7 @@ def print_phase_footer(name, metrics, duration: float = 0.0):
         print(f"  {'Execution Time':20}: {duration:.2f}s")
     print("-" * 40)
 
-def format_result(group, target, server, rtype, status, latency, is_consistent):
+def format_result(target, group, server, rtype, status, latency, is_consistent, warn_ms=150, crit_ms=500):
     if status == "NOERROR" or status == "NXDOMAIN":
         status_clr = OK
     elif "TIMEOUT" in status or "UNREACHABLE" in status:
@@ -209,8 +242,30 @@ def format_result(group, target, server, rtype, status, latency, is_consistent):
     else:
         status_clr = FAIL
         
+    lat_clr = OK
+    if latency >= crit_ms:
+        lat_clr = FAIL
+    elif latency >= warn_ms:
+        lat_clr = WARN
+        
     consistency_str = f" [{WARN}DIV!{RESET}]" if not is_consistent else ""
-    return f"  [{INFO}REC{RESET}] {group:10} | {target:25} -> {server:15} | {rtype:5} | {status_clr}{status:12}{RESET} | {latency:4.1f}ms{consistency_str}"
+    return f"  [{INFO}REC{RESET}] {target:30} | {INFO}{group:11}{RESET} | {server:15} | {rtype:5} | {status_clr}{status:12}{RESET} | {lat_clr}{latency:4.1f}ms{RESET} | {consistency_str if consistency_str else 'OK'}"
+
+def print_record_findings(findings):
+    """Print semantic findings/warnings for a specific record."""
+    if not findings:
+        return
+        
+    for finding in findings:
+        # Identify severity (simple keyword matching)
+        if any(w in finding.upper() for w in ["INVAL!", "MISSING", "REQUIRED", "DANGLING"]):
+            clr = FAIL
+        elif any(w in finding.upper() for w in ["PERMISSIVE", "INSECURE", "HIGH", "MONITORING"]):
+            clr = WARN
+        else:
+            clr = INFO
+            
+        print(f"       {clr}↳ ! {finding}{RESET}")
 
 def print_progress(current, total, prefix="", length=30):
     """Prints a carriage-return progress bar."""

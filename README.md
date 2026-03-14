@@ -2,7 +2,7 @@
 > *Because it is always DNS. Or not. But mostly yes.*
 
 [![Python](https://img.shields.io/badge/Language-Python-3776AB.svg)](https://www.python.org/)
-[![Status](https://img.shields.io/badge/Status-Stable_(v2.9.7)-green.svg)]()
+[![Status](https://img.shields.io/badge/Status-Stable_(v4.1.0)-green.svg)]()
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)]()
 
 Does your boss ask for "evidence" that the DNS is broken? 
@@ -15,12 +15,45 @@ This tool has been completely rewritten in Python to ensure native compatibility
 
 ## 🚀 Features (Buzzwords)
 
-*   **3-Phase Diagnostics**: Optimized workflow covering Server (Infra), Zone (Sync/AXFR), and Records (Consistency).
-*   **True Parallelism**: Multithreaded execution to test hundreds of records in seconds.
-*   **Premium Dashboard**: Modern visual reports (HTML) with detailed metrics and mobile responsiveness.
-*   **Security & Compliance**: AXFR vulnerability testing, BIND version audit, DNSSEC validation, DoH/DoT, and EDNS0 (NSID).
-*   **Dynamic Configuration**: Full `settings.ini` integration (Respecting toggles, timeouts, and consistency modes).
-*   **Friendly Interface**: Color-coded terminal logs with phase-based grouping.
+*   **3-Phase Diagnostics**: Cover Infrastructure, Advanced Zone Audit, and Record Consistency.
+*   **Semantic DNS Audit (v4.0.0)**: SPF/DMARC validation, Dangling DNS detection, MX reachability, and Wildcard mapping.
+*   **Performance Tracking (v4.1.0)**: Configurable latency thresholds (WARN/CRIT) across all diagnostic phases.
+*   **Advanced Zone Audit (v3.0.0)**: RFC 1912 Timer checks, Zone DNSSEC validation, MNAME reachability, and Web-Server risk detection. 
+*   **Premium Dashboard**: Modern responsive HTML reports with charts and detailed findings.
+
+## 📊 Logic Flow
+
+```mermaid
+graph TD
+    Start((Start)) --> LoadConfig[Load settings.ini & Data]
+    LoadConfig --> Phase1{Phase 1: Infra}
+    
+    subgraph "Phase 1: Infrastructure"
+        Phase1 --> Ping[Ping & Latency SLA]
+        Phase1 --> Service[UDP/TCP 53, DoH, DoT]
+        Phase1 --> Security[BIND, OpenResolver, DNSSEC]
+    end
+
+    Phase1 --> Phase2{Phase 2: Zone}
+    
+    subgraph "Phase 2: Zone Integrity"
+        Phase2 --> Sync[SOA Serial Sync]
+        Phase2 --> AA[Lame Delegation AA Flag]
+        Phase2 --> Advanced[Audit: RFC 1912, SEC, Web-Risk]
+    end
+
+    Phase2 --> Phase3{Phase 3: Records}
+    
+    subgraph "Phase 3: Semantic Audit"
+        Phase3 --> Parallel[Parallel Recursive Queries]
+        Phase3 --> Semantic[SPF/DMARC Syntax & Security]
+        Phase3 --> Chain[Dangling DNS & MX Target Test]
+        Phase3 --> Perf[Latency Threshold Alerts]
+    end
+
+    Phase3 --> Reports[Generate HTML / JSON / CSV / Terminal]
+    Reports --> End((End))
+```
 
 ## 📦 Installation
 

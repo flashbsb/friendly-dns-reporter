@@ -157,6 +157,18 @@ class Settings:
     def enable_soa_serial_check(self):
         return self.get_bool("ZONE_TESTS", "ENABLE_SOA_SERIAL_CHECK", True)
 
+    @property
+    def enable_soa_timer_audit(self):
+        return self.get_bool("ZONE_TESTS", "ENABLE_SOA_TIMER_AUDIT", True)
+
+    @property
+    def enable_zone_dnssec_check(self):
+        return self.get_bool("ZONE_TESTS", "ENABLE_ZONE_DNSSEC_CHECK", True)
+
+    @property
+    def enable_web_risk_check(self):
+        return self.get_bool("ZONE_TESTS", "ENABLE_WEB_RISK_CHECK", True)
+
     # --- CONSISTENCY ---
     @property
     def consistency_checks(self):
@@ -173,3 +185,11 @@ class Settings:
     @property
     def strict_ttl_check(self):
         return self.get_bool("CONSISTENCY", "STRICT_TTL_CHECK", False)
+
+    @property
+    def rec_latency_warn(self):
+        return self.get_int("CONSISTENCY", "REC_LATENCY_WARN", 150)
+
+    @property
+    def rec_latency_crit(self):
+        return self.get_int("CONSISTENCY", "REC_LATENCY_CRIT", 500)

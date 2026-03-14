@@ -2,13 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
-## [2.9.7] - 2026-03-13
+## [4.1.0] - 2026-03-14
 ### Added
-- **Contextual AXFR Policy Audit**: Introduced `AXFR_ALLOWED_GROUPS` in `settings.ini`.
-- **Objective AXFR Labeling**: Replaced "SAFE/VULN" with technical labels (`REFUSED`, `XFR-OK (n nodes)`, `TIMEOUT`).
-- **Policy Compliance Check**: Phase 2 now color-codes AXFR status based on intent: `REFUSED` is Green for general servers but Yellow/Red for expected secondaries. `XFR-OK` is Green for secondaries but Red for unauthorized servers.
+- **Phase 3 Performance Visualization**: Latency column is now colorized (Green/Yellow/Red) based on thresholds.
+- **Configurable Thresholds**: Added `REC_LATENCY_WARN` and `REC_LATENCY_CRIT` to `settings.ini`.
 
-## [2.9.6] - 2026-03-13
+## [4.0.1] - 2026-03-14
+### Fixed
+- **SPF/DMARC Grouping**: Corrected logic to detect multiple mail records per domain.
+
+## [4.0.0] - 2026-03-14
+### Added
+- **Major Milestone: Semantic DNS Audit**: Phase 3 now performs intelligent analysis (SPF/DMARC, Dangling DNS, Port 25, Wildcards, TTL).
+
+## [3.1.2] - 2026-03-14
+### Added
+- **Project Footer**: Added contribution invitation and repository link.
+
+## [3.1.1] - 2026-03-14
+### Changed
+- **Phase 3 Layout Refined**: Adjusted column order to `Domain | Group | Server | Type`.
+
+## [3.1.0] - 2026-03-14
+### Added
+- **Phase 3 Evolution**: Refactored record consistency to collect and sort results before printing.
+
+## [3.0.0] - 2026-03-13
 ### Added
 - **SOA Sync Visualization**: The `SOA Serial` column now displays `OK(SERIAL)` in green if the zone is synchronized across all servers, or `FAIL(SERIAL)` in red if discrepancies are found.
 
