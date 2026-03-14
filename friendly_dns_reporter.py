@@ -5,15 +5,48 @@
 =============================================================================
 FRIENDLY DNS REPORTER - PYTHON EDITION
 =============================================================================
-Version: 2.4.0
+Version: 2.8.2
 Author: flashbsb
 Description: 3-Phase Automated DNS diagnostics for Windows and Linux.
 =============================================================================
 """
 
-import argparse
 import sys
 import os
+import subprocess
+
+def _verify_and_install_dependencies():
+    """Verify and automatically install required dependencies for Windows and Linux."""
+    required_packages = {
+        "urllib3": "urllib3",
+        "dns": "dnspython",
+        "requests": "requests",
+        "jinja2": "Jinja2",
+        "icmplib": "icmplib"
+    }
+    
+    missing_packages = []
+    for module_name, pip_name in required_packages.items():
+        try:
+            __import__(module_name)
+        except ImportError:
+            missing_packages.append(pip_name)
+            
+    if missing_packages:
+        print(f"[*] Missing dependencies detected: {', '.join(missing_packages)}")
+        print(f"[*] Attempting to install missing dependencies automatically...")
+        try:
+            # Use sys.executable to ensure pip corresponds to the current python environment
+            subprocess.check_call([sys.executable, "-m", "pip", "install"] + missing_packages)
+            print("[+] Dependencies installed successfully. Resuming execution...\n")
+        except subprocess.CalledProcessError as e:
+            print(f"[-] Failed to install dependencies automatically. Error: {e}")
+            print(f"[-] Please manually run: {sys.executable} -m pip install {' '.join(missing_packages)}")
+            sys.exit(1)
+
+_verify_and_install_dependencies()
+
+import argparse
 import csv
 import concurrent.futures
 import threading
@@ -50,15 +83,6 @@ def setup_logging(log_dir):
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     return log_file
 
-def check_dependencies():
-    """Verify required libraries."""
-    required = {"dns": "dnspython", "requests": "requests", "jinja2": "jinja2", "icmplib": "icmplib"}
-    missing = [pkg for mod, pkg in required.items() if not __import__(mod, fromlist=[''])]
-    if missing:
-        print(f"\nERROR: Missing dependencies: {', '.join(missing)}")
-        print("Run: pip install -r requirements.txt")
-        sys.exit(1)
-
 def load_datasets(domains_path, groups_path):
     """Load and normalize CSV datasets."""
     def _read_csv(path):
@@ -93,6 +117,7 @@ def compare_consistency(queries, settings):
 
 def run_phase1_infrastructure(servers, srv_groups, conn, dns_engine, settings, lock):
     """Phase 1: Deep Infrastructure Check (Once per server)."""
+    phase_start_time = time.time()
     infra_results = {}
     
     def _check_server(srv):
@@ -138,6 +163,9 @@ def run_phase1_infrastructure(servers, srv_groups, conn, dns_engine, settings, l
             res["recursion"] = "UNREACHABLE"
             res["dot"] = "UNREACHABLE"
             res["doh"] = "UNREACHABLE"
+            res["dnssec"] = "UNREACHABLE"
+            res["edns0"] = "UNREACHABLE"
+            res["open_resolver"] = "UNREACHABLE"
         else:
             # Protocols (DoT/DoH)
             dot, dot_lat = dns_engine.check_dot(srv) if settings.enable_dot_check else (False, 0)
@@ -147,6 +175,19 @@ def run_phase1_infrastructure(servers, srv_groups, conn, dns_engine, settings, l
             doh, doh_lat = dns_engine.check_doh(srv) if settings.enable_doh_check else (False, 0)
             res["doh"] = "YES" if doh is True else ("NO" if doh is False else "TIMEOUT")
             res["doh_lat"] = doh_lat
+            
+            # Advanced Infrastructure Checks
+            dnssec, dsec_lat = dns_engine.check_dnssec(srv) if settings.enable_dnssec_check else (False, 0)
+            res["dnssec"] = "OK" if dnssec is True else ("FAIL" if dnssec is False else "TIMEOUT")
+            res["dnssec_lat"] = dsec_lat
+            
+            edns0, edns_lat = dns_engine.check_edns0(srv) if settings.enable_edns_check else (False, 0)
+            res["edns0"] = "OK" if edns0 is True else ("FAIL" if edns0 is False else "TIMEOUT")
+            res["edns0_lat"] = edns_lat
+            
+            open_res, open_lat = dns_engine.check_open_resolver(srv) if settings.enable_recursion_check else (False, 0)
+            res["open_resolver"] = "VULN" if open_res is True else ("SAFE" if open_res is False else "TIMEOUT")
+            res["open_resolver_lat"] = open_lat
         
         res["trace"] = conn.traceroute(srv, max_hops=settings.trace_max_hops) if settings.enable_trace else None
         
@@ -160,12 +201,14 @@ def run_phase1_infrastructure(servers, srv_groups, conn, dns_engine, settings, l
     # Phase Summary
     alive = sum(1 for r in infra_results.values() if not r['is_dead'])
     dead = len(infra_results) - alive
-    ui.print_phase_footer("1: Infrastructure", {"Total Servers": len(infra_results), "Status Alive": alive, "Status Dead": dead})
+    phase_duration = time.time() - phase_start_time
+    ui.print_phase_footer("1: Infrastructure", {"Total Servers": len(infra_results), "Status Alive": alive, "Status Dead": dead}, phase_duration)
     
     return infra_results
 
 def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache, lock):
     """Phase 2: Zone Integrity & SOA Synchronization."""
+    phase_start_time = time.time()
     zone_results = []
     zones = {}
     for entry in domains_raw:
@@ -206,12 +249,14 @@ def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache,
         
     # Phase Summary
     vuln = sum(1 for r in zone_results if r['axfr_vulnerable'])
-    ui.print_phase_footer("2: Zone Integrity", {"Total Zones": len(zones), "AXFR Vulnerabilities": vuln})
+    phase_duration = time.time() - phase_start_time
+    ui.print_phase_footer("2: Zone Integrity", {"Total Zones": len(zones), "AXFR Vulnerabilities": vuln}, phase_duration)
         
     return zone_results
 
 def run_phase3_records(tasks, dns_engine, settings, infra_cache, results, lock):
     """Phase 3: Parallel Record Consistency Check."""
+    phase_start_time = time.time()
     def _worker(target, group_name, server, record_types):
         # Circuit Breaker
         infra = infra_cache.get(server, {})
@@ -264,19 +309,20 @@ def run_phase3_records(tasks, dns_engine, settings, infra_cache, results, lock):
     # Phase Summary
     succ = sum(1 for r in results if r['status'] == "NOERROR")
     fail = len(results) - succ
-    ui.print_phase_footer("3: Record Consistency", {"Total Queries": len(results), "Success": succ, "Failures": fail})
+    phase_duration = time.time() - phase_start_time
+    ui.print_phase_footer("3: Record Consistency", {"Total Queries": len(results), "Success": succ, "Failures": fail}, phase_duration)
 
 def main():
-    check_dependencies()
+    script_start_time = time.time()
     settings = Settings()
     
-    parser = argparse.ArgumentParser(description="FriendlyDNSReporter - Professional Suite")
+    parser = argparse.ArgumentParser(description="FriendlyDNSReporter - Professional Suite (v2.8.2)")
     parser.add_argument("-n", "--domains", default=os.path.join("config", "domains.csv"), help="Domains CSV")
     parser.add_argument("-g", "--groups", default=os.path.join("config", "groups.csv"), help="Groups CSV")
     parser.add_argument("-o", "--output", default=settings.log_dir, help="Output DIR")
     args = parser.parse_args()
     
-    ui.print_banner("v2.7.0")
+    ui.print_banner("v2.8.2")
     ui.print_header(settings.max_threads, settings.consistency_checks, os.path.basename(args.domains))
     
     domains_raw, dns_groups = load_datasets(args.domains, args.groups)
@@ -349,7 +395,8 @@ def main():
     total, success = len(results), sum(1 for r in results if r['status'] == "NOERROR")
     div = sum(1 for r in results if r['internally_consistent'] == "DIV!")
     sync_issues = sum(1 for z in zone_results if z['serial'] == "?" or z['status'] == "UNREACHABLE")
-    ui.print_summary_table(total, success, total-success, div, sync_issues, paths)
+    script_duration = time.time() - script_start_time
+    ui.print_summary_table(total, success, total-success, div, sync_issues, paths, script_duration)
 
 if __name__ == "__main__":
     main()

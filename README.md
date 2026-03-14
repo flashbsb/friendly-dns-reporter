@@ -2,7 +2,7 @@
 > *Because it is always DNS. Or not. But mostly yes.*
 
 [![Python](https://img.shields.io/badge/Language-Python-3776AB.svg)](https://www.python.org/)
-[![Status](https://img.shields.io/badge/Status-Stable_(v2.4.0)-green.svg)]()
+[![Status](https://img.shields.io/badge/Status-Stable_(v2.8.2)-green.svg)]()
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)]()
 
 Does your boss ask for "evidence" that the DNS is broken? 
@@ -30,9 +30,9 @@ This tool has been completely rewritten in Python to ensure native compatibility
     cd FriendlyDNSReporter
     ```
 
-2.  Install dependencies:
+2.  Dependencies are now installed **automatically** during the first run. Just execute the script:
     ```bash
-    pip install -r requirements.txt
+    python friendly_dns_reporter.py
     ```
 
 ## 🎮 Usage

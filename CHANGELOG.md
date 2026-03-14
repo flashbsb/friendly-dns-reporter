@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.8.2] - 2026-03-13
+### Fixed
+- **NSID Attribute Support**: Implemented robust attribute access for extracting the NSID in dnspython (checking for both `.nsid` and `.data`), resolving a script-breaking crash `AttributeError: 'NSIDOption' object has no attribute 'data'` on newer dnspython versions.
+
+## [2.8.1] - 2026-03-13
+### Added
+- **Recursion Query Latency**: Phase 1 now measures and displays the specific response time for UDP Recursion queries directly in the terminal output, mirroring the TCP and ICMP latency visualizations.
+
+## [2.8.0] - 2026-03-13
+### Added
+- **Auto-dependency resolution**: The script now automatically detects if required Python packages (`urllib3`, `dnspython`, `requests`, `Jinja2`, `icmplib`) are missing and uses `sys.executable` with `pip` to install them silently on both Windows and Linux, eliminating `ModuleNotFoundError` completely.
+
 ## [2.7.0] - 2026-03-13
 ### Added
 - **Granular Latency Tracking**: Phase 1 now measures and displays the specific response time for every successful probe (Port 53 TCP, Port 443 TCP, and DNS UDP).

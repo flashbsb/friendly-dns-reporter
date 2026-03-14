@@ -22,14 +22,14 @@ def print_header(threads, consistency, target):
 def print_phase(name):
     print(f"\n{BOLD}{INFO}>>> PHASE {name}{RESET}")
     if "1" in name:
-        print(f"  {'IP Address':15} | {'Groups':15} | {'Ping @ Lat':9} | {'53-TCP':10} | {'53-UDP':10} | {'443-TCP':10} | {'Recursion':9} | Status")
+        print(f"  {'IP Address':15} | {'PING':11} | {'53 UDP':11} | {'53 TCP':11} | {'DNSSEC':11} | {'EDNS0':11} | {'DoT (853)':11} | {'DoH (443)':11} | {'OpenRes':9} | Status")
     elif "2" in name:
         print(f"  {'Domain':25} -> {'Server':15} | {'Serial':10} | AXFR Status")
     elif "3" in name:
         print(f"  {'Group':10} | {'Target':30} -> {'Server':15} | {'Type':5} | {'Status':12}")
     print("-" * 105)
 
-def print_summary_table(total, success, fail, div, sync_issues, reports):
+def print_summary_table(total, success, fail, div, sync_issues, reports, duration: float = 0.0):
     print("\n" + "=" * 80)
     print(f"{BOLD}FINAL DIAGNOSTIC SUMMARY{RESET}")
     print("=" * 80)
@@ -38,6 +38,7 @@ def print_summary_table(total, success, fail, div, sync_issues, reports):
     print(f"  Failures (ERR)       : {(FAIL if fail > 0 else OK)}{fail}{RESET}")
     print(f"  Divergences (DIV)    : {(WARN if div > 0 else OK)}{div}{RESET}")
     print(f"  Sync/Zone Issues     : {(FAIL if sync_issues > 0 else OK)}{sync_issues}{RESET}")
+    print(f"  Total Execution Time : {duration:.2f}s")
     print("-" * 80)
     print(f"  Reports Generated:")
     for label, path in reports.items():
@@ -52,29 +53,35 @@ def print_interrupt():
 
 def print_infra_detail(srv, data):
     ping_clr = OK if data['ping'] == "OK" else FAIL
-    ping_str = f"{data['ping']} ({data['latency']:.0f}ms)" if data['ping'] == "OK" else data['ping']
+    ping_str = f"OK ({data['latency']:.0f}ms)" if data['ping'] == "OK" else "FAIL"
     
     p53t_clr = OK if data['port53'] == "OPEN" else FAIL
-    p53t_str = f"{data['port53']} ({data['port53_lat']:.0f}ms)" if data['port53'] == "OPEN" else data['port53']
+    p53t_str = f"OK ({data['port53_lat']:.0f}ms)" if data['port53'] == "OPEN" else "FAIL"
     
-    # UDP works if either recursion or version didn't timeout
-    udp_ok = data['recursion'] not in ["TIMEOUT", "UNREACHABLE", "DISABLED"] or \
-             data['version'] not in ["TIMEOUT", "UNREACHABLE", "DISABLED"]
+    udp_ok = data['version'] not in ["TIMEOUT", "UNREACHABLE", "DISABLED"] or data['recursion'] not in ["TIMEOUT", "UNREACHABLE", "DISABLED"]
     p53u_clr = OK if udp_ok else FAIL
-    # Use version latency for UDP if recursion is timeout/disabled
     udp_lat = data['recursion_lat'] if data['recursion'] not in ["TIMEOUT", "DISABLED"] else data['version_lat']
-    udp_str = f"OK ({udp_lat:.0f}ms)" if udp_ok else "TIMEOU"
+    p53u_str = f"OK ({udp_lat:.0f}ms)" if udp_ok else "TIMEOUT"
     
-    p443_clr = OK if data['port443'] == "OPEN" else FAIL
-    p443_str = f"{data['port443']} ({data['port443_lat']:.0f}ms)" if data['port443'] == "OPEN" else data['port443']
+    dot_clr = OK if data.get('dot') == "YES" else (FAIL if data.get('dot') == "NO" else WARN)
+    dot_str = f"OK ({data.get('dot_lat', 0):.0f}ms)" if data.get('dot') == "YES" else data.get('dot', '--')
     
-    rec_clr = OK if data['recursion'] == "OPEN" else (WARN if data['recursion'] == "TIMEOUT" else FAIL)
+    doh_clr = OK if data.get('doh') == "YES" else (FAIL if data.get('doh') == "NO" else WARN)
+    doh_str = f"OK ({data.get('doh_lat', 0):.0f}ms)" if data.get('doh') == "YES" else data.get('doh', '--')
+    
+    edns_clr = OK if data.get('edns0') == "OK" else FAIL
+    edns_str = f"OK ({data.get('edns0_lat', 0):.0f}ms)" if data.get('edns0') == "OK" else data.get('edns0', '--')
+    
+    dsec_clr = OK if data.get('dnssec') == "OK" else FAIL
+    dsec_str = f"OK ({data.get('dnssec_lat', 0):.0f}ms)" if data.get('dnssec') == "OK" else data.get('dnssec', '--')
+    
+    openres = data.get('open_resolver', 'SAFE')
+    openres_clr = FAIL if openres == "VULN" else OK
+    openres_str = f"VULN ({data.get('open_resolver_lat', 0):.0f}ms)" if openres == "VULN" else openres
+    
     alive_str = f"{OK}ALIVE{RESET}" if not data['is_dead'] else f"{FAIL}DEAD{RESET}"
     
-    groups_str = data.get('groups', 'N/A')
-    if len(groups_str) > 15: groups_str = groups_str[:12] + "..."
-    
-    print(f"  {srv:15} | {groups_str:15} | {ping_clr}{ping_str:9}{RESET} | {p53t_clr}{p53t_str:10}{RESET} | {p53u_clr}{udp_str:10}{RESET} | {p443_clr}{p443_str:10}{RESET} | {rec_clr}{data['recursion']:9}{RESET} | {alive_str}")
+    print(f"  {srv:15} | {ping_clr}{ping_str:11}{RESET} | {p53u_clr}{p53u_str:11}{RESET} | {p53t_clr}{p53t_str:11}{RESET} | {dsec_clr}{dsec_str:11}{RESET} | {edns_clr}{edns_str:11}{RESET} | {dot_clr}{dot_str:11}{RESET} | {doh_clr}{doh_str:11}{RESET} | {openres_clr}{openres_str:9}{RESET} | {alive_str}")
 
 def print_zone_detail(srv, domain, serial, axfr_ok, status):
     sync_clr = OK if serial != "?" and status == "NOERROR" else (WARN if status == "UNREACHABLE" else FAIL)
@@ -82,10 +89,12 @@ def print_zone_detail(srv, domain, serial, axfr_ok, status):
     axfr_str = "VULNERABLE!" if axfr_ok else "SAFE"
     print(f"  {domain:25} -> {srv:15} | {sync_clr}{serial:10}{RESET} | {axfr_clr}{axfr_str}{RESET}")
 
-def print_phase_footer(name, metrics):
+def print_phase_footer(name, metrics, duration: float = 0.0):
     print(f"  {BOLD}--- Phase {name} Summary ---{RESET}")
     for k, v in metrics.items():
         print(f"  {k:20}: {v}")
+    if duration > 0.0:
+        print(f"  {'Execution Time':20}: {duration:.2f}s")
     print("-" * 40)
 
 def format_result(group, target, server, rtype, status, latency, is_consistent):

@@ -50,7 +50,12 @@ class DNSEngine:
                 if response.edns == 0:
                     for opt in response.options:
                         if opt.otype == 3:
-                            nsid = opt.data.decode('utf-8', errors='ignore')
+                            if hasattr(opt, 'nsid'):
+                                nsid = opt.nsid.decode('utf-8', errors='ignore')
+                            elif hasattr(opt, 'data'):
+                                nsid = opt.data.decode('utf-8', errors='ignore')
+                            else:
+                                nsid = str(opt)
 
                 return {
                     "status": status,
@@ -76,20 +81,61 @@ class DNSEngine:
         except Exception as e:
             return False, str(e)
 
-    def check_dnssec(self, server, domain):
-        """Check if a domain is DNSSEC signed on a server. Returns True, False, or None."""
+    def check_dnssec(self, server):
+        """Check if a server supports DNSSEC validation. Returns (True/False/None, latency)."""
+        start = time.time()
         try:
-            query = dns.message.make_query(domain, "SOA", want_dnssec=True)
+            # We query the root zone (.) to be independent of user domains
+            query = dns.message.make_query(".", "DNSKEY", want_dnssec=True)
             response = dns.query.udp(query, server, timeout=self.timeout)
+            latency = (time.time() - start) * 1000
             
             for rrset in response.answer:
                 if rrset.rdtype == dns.rdatatype.RRSIG:
-                    return True
-            return False
+                    return True, latency
+            return False, latency
         except dns.exception.Timeout:
-            return None
+            return None, self.timeout * 1000
         except:
-            return False
+            return False, 0
+
+    def check_open_resolver(self, server):
+        """Check if server acts as an open resolver (Amplification risk). Returns (True/False/None, latency)."""
+        start = time.time()
+        try:
+            # Query a third-party domain without recursion desired
+            query = dns.message.make_query("google.com", "A")
+            query.flags &= ~dns.flags.RD 
+            response = dns.query.udp(query, server, timeout=self.timeout)
+            latency = (time.time() - start) * 1000
+            
+            # If it answers with an A record, it is resolving for us
+            if response.answer and response.answer[0].rdtype == dns.rdatatype.A:
+                return True, latency
+            return False, latency
+        except dns.exception.Timeout:
+            return None, self.timeout * 1000
+        except:
+            return False, 0
+
+    def check_edns0(self, server):
+        """Check if server supports EDNS0 and large UDP payloads. Returns (True/False/None, latency)."""
+        start = time.time()
+        try:
+            query = dns.message.make_query("google.com", "A")
+            # Request a 4096 buffer size
+            query.use_edns(edns=0, payload=4096)
+            response = dns.query.udp(query, server, timeout=self.timeout)
+            latency = (time.time() - start) * 1000
+            
+            # Check if response retains EDNS0
+            if response.edns == 0:
+                return True, latency
+            return False, latency
+        except dns.exception.Timeout:
+            return None, self.timeout * 1000
+        except:
+            return False, 0
 
     def check_recursion(self, server):
         """Check if recursion is available. Returns (True/False/None, latency)."""
