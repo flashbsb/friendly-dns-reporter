@@ -3,196 +3,374 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FriendlyDNSReporter - Dashboard</title>
+    <title>Friendly DNS Reporter - Forensic Console</title>
     <style>
         :root {
-            --bg: #0f172a;
-            --card: #1e293b;
-            --border: #334155;
-            --text: #f1f5f9;
-            --text-muted: #94a3b8;
-            --accent: #3b82f6;
-            --success: #10b981;
-            --warning: #f59e0b;
-            --danger: #ef4444;
-            --info: #06b6d4;
+            --bg: #090b10;
+            --card-bg: #11141a;
+            --header-bg: #181b1f;
+            --border: #222529;
+            --text-primary: #d8d9da;
+            --text-secondary: #949a9e;
+            --accent: #3274d9;
+            --success: #56a64b;
+            --warning: #f2cc0c;
+            --danger: #e02f44;
+            --info: #3274d9;
+            --highlight-bg: rgba(224, 47, 68, 0.08);
         }
-        * { box-sizing: border-box; }
-        body {
-            font-family: 'Inter', -apple-system, sans-serif;
-            background: var(--bg);
-            color: var(--text);
-            margin: 0;
-            padding: 30px;
-            line-height: 1.5;
-        }
-        .container { max-width: 1400px; margin: 0 auto; }
-        .header {
-            display: flex;
-            justify-content: space-between;
-            align-items: end;
-            margin-bottom: 40px;
-            border-bottom: 2px solid var(--border);
-            padding-bottom: 20px;
-        }
-        .header h1 { margin: 0; font-size: 2rem; color: var(--accent); }
-        .header p { margin: 5px 0 0 0; color: var(--text-muted); }
 
-        .section-title {
-            font-size: 1.5rem;
-            margin: 40px 0 20px 0;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        .section-title span { background: var(--accent); color: white; padding: 2px 10px; border-radius: 8px; font-size: 1rem; }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Inter', system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text-primary); line-height: 1.5; padding: 20px; font-weight: 400; }
+        .container { max-width: 1600px; margin: 0 auto; }
 
-        .grid { display: grid; gap: 20px; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); }
-        .card {
-            background: var(--card);
-            border: 1px solid var(--border);
-            border-radius: 16px;
-            padding: 24px;
-            transition: transform 0.2s, border-color 0.2s;
-        }
-        .card:hover { border-color: var(--accent); transform: translateY(-4px); }
-        .card-header { display: flex; justify-content: space-between; align-items: start; margin-bottom: 15px; }
-        .card-header h3 { margin: 0; font-size: 1.2rem; }
-
-        .badge {
-            padding: 4px 10px;
-            border-radius: 99px;
-            font-size: 0.75rem;
-            font-weight: 700;
-            text-transform: uppercase;
-        }
-        .bg-success { background: rgba(16, 185, 129, 0.1); color: var(--success); border: 1px solid var(--success); }
-        .bg-danger { background: rgba(239, 68, 68, 0.1); color: var(--danger); border: 1px solid var(--danger); }
-        .bg-warning { background: rgba(245, 158, 11, 0.1); color: var(--warning); border: 1px solid var(--warning); }
-        .bg-info { background: rgba(59, 130, 246, 0.1); color: var(--accent); border: 1px solid var(--accent); }
-        .bg-neutral { background: rgba(148, 163, 184, 0.1); color: var(--text-muted); border: 1px solid var(--text-muted); }
-
-        .stats-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
-        .stats-table td { padding: 8px 0; border-bottom: 1px solid #ffffff08; }
-        .stats-table td:last-child { text-align: right; font-weight: 600; }
-        .label { color: var(--text-muted); font-weight: normal; }
+        header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 25px; gap: 20px; border-bottom: 1px solid var(--border); padding-bottom: 20px; position: sticky; top: 0; background: var(--bg); z-index: 100; }
+        .brand h1 { font-size: 24px; color: #fff; font-weight: 800; letter-spacing: -0.5px; }
+        .brand p { font-size: 13px; color: var(--text-secondary); margin-top: 4px; }
         
-        /* New coloring for data cells */
-        .val-ok { color: var(--success); }
-        .val-err { color: var(--danger); font-weight: bold; }
-        .val-warn { color: var(--warning); }
-        .val-none { color: var(--text-muted); }
+        .search-container { position: relative; flex-grow: 1; max-width: 600px; }
+        .global-search { width: 100%; background: var(--card-bg); border: 1px solid var(--border); color: #fff; padding: 12px 20px 12px 45px; border-radius: 8px; font-size: 14px; transition: all 0.2s; }
+        .global-search:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(50, 116, 217, 0.2); }
+        .search-icon { position: absolute; left: 15px; top: 50%; transform: translateY(-50%); color: var(--text-secondary); pointer-events: none; }
 
-        .answers-box {
-            margin-top: 15px;
-            padding: 10px;
-            background: #00000030;
-            border-radius: 8px;
-            font-family: 'Fira Code', monospace;
-            font-size: 0.8rem;
-            word-break: break-all;
-            max-height: 100px;
-            overflow-y: auto;
-        }
+        .analytics-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 25px; }
+        .metric-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 16px; border-bottom: 3px solid transparent; }
+        .metric-card.alert { border-bottom-color: var(--danger); }
+        .metric-label { font-size: 10px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 700; margin-bottom: 8px; }
+        .metric-value { font-size: 22px; font-weight: 800; color: #fff; display: flex; align-items: baseline; gap: 5px; }
+        .metric-sub { font-size: 11px; color: var(--text-secondary); margin-top: 4px; }
 
-        .infra-grid { display: grid; gap: 15px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
-        .sync-err { color: var(--danger); }
-        .sync-ok { color: var(--success); }
+        .radar-strip { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 25px; }
+        .radar-item { display: flex; align-items: center; gap: 10px; background: rgba(50, 116, 217, 0.05); border: 1px solid var(--border); padding: 8px 15px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+        .radar-item.danger { color: var(--danger); border-color: rgba(224, 47, 68, 0.3); background: rgba(224, 47, 68, 0.05); }
+        .radar-item.safe { color: var(--success); border-color: rgba(86, 166, 75, 0.3); background: rgba(86, 166, 75, 0.05); }
 
-        pre { font-family: 'Fira Code', monospace; margin: 0; white-space: pre-wrap; }
+        .charts-container { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 15px; margin-bottom: 30px; }
+        .chart-box { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 15px; }
+        .chart-svg { width: 100%; height: 120px; overflow: visible; }
+        .line-path { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+        .data-point { fill: #fff; stroke: var(--accent); stroke-width: 2; r: 3.5; cursor: pointer; }
+        .data-point:hover { r: 5; }
+
+        .forensic-panel { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 30px; overflow: hidden; }
+        .panel-header { background: #1a1e23; padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; cursor: pointer; }
+        .panel-title { font-size: 14px; font-weight: 700; color: var(--accent); display: flex; align-items: center; gap: 10px; }
+        .panel-analytics { display: flex; gap: 20px; }
+        
+        .table-area { overflow-x: auto; max-height: 600px; overflow-y: auto; }
+        table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; }
+        thead { position: sticky; top: 0; z-index: 10; background: #1a1e23; }
+        th { padding: 12px 15px; text-transform: uppercase; font-size: 11px; color: var(--text-secondary); font-weight: 700; border-bottom: 1px solid var(--border); cursor: pointer; }
+        td { padding: 12px 15px; border-bottom: 1px solid var(--border); color: #cdd1d4; }
+        tr.anomaly-row td { background: var(--highlight-bg); }
+        
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 800; text-transform: uppercase; }
+        .badge-danger { background: rgba(224, 47, 68, 0.15); color: #ff5f6d; }
+        .badge-success { background: rgba(86, 166, 75, 0.15); color: #73f273; }
+        .badge-warning { background: rgba(242, 204, 12, 0.15); color: #ffdb33; }
+        .badge-info { background: rgba(50, 116, 217, 0.15); color: #7fbcf5; }
+
+        .text-match { background: rgba(242, 204, 12, 0.3); color: #fff; padding: 0 2px; border-radius: 2px; }
+        .source-box { border: 2px dashed var(--border); padding: 50px; text-align: center; border-radius: 12px; margin-bottom: 25px; }
+        .source-box.active { border-color: var(--accent); background: rgba(50, 116, 217, 0.05); }
+        .collapsed { display: none; }
+        .btn { background: var(--header-bg); color: #fff; border: 1px solid var(--border); padding: 8px 15px; border-radius: 6px; font-size: 13px; cursor: pointer; }
+        select { background: #000; color: #fff; border: 1px solid var(--border); padding: 8px; border-radius: 6px; outline: none; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <div>
-                <h1>Friendly DNS Reporter</h1>
-                <p>Automated Diagnostics | Generated: {{ summary.timestamp }}</p>
-            </div>
-            <div style="text-align: right">
-                <div class="badge bg-info">Python Suite v6.8.0</div>
-            </div>
-        </div>
 
-        <!-- PHASE 1: INFRASTRUCTURE -->
-        <div class="section-title"><span>1</span> Server Infrastructure Diagnostics</div>
-        <div class="infra-grid">
-            {% for srv, data in infrastructure.items() %}
-            <div class="card" {% if data.is_dead %}style="opacity: 0.7; border-style: dashed;"{% endif %}>
-                <div class="card-header">
-                    <h3>{{ srv }}</h3>
-                    <span class="badge {% if data.is_dead %}bg-danger{% elif data.ping == 'OK' %}bg-success{% else %}bg-warning{% endif %}">
-                        {{ 'DEAD' if data.is_dead else data.ping }}
-                    </span>
-                </div>
-                <table class="stats-table">
-                    <tr>
-                        <td class="label">Ping Avg</td>
-                        <td>
-                            <span class="{{ 'val-ok' if data.ping == 'OK' else 'val-err' }}">{{ data.ping }}</span> ({{ data.latency|default(0)|round(0) }}ms)
-                            {% if data.ping_count and data.ping_count >= 3 and data.ping == 'OK' %}
-                            <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">
-                                {{ (data.ping_count - (data.ping_count * data.packet_loss))|int }}/{{ data.ping_count }} recv ({{ (data.packet_loss * 100)|int }}% loss)
-                            </div>
-                            {% endif %}
-                        </td>
-                    </tr>
-                    <tr><td class="label">Port 53 (UDP)</td><td><span class="{{ 'val-ok' if data.port53u_serv == 'OK' else 'val-err' }}">{{ data.port53u_serv }}</span> ({{ data.recursion_lat|default(0)|round(0) }}ms)</td></tr>
-                    <tr><td class="label">Port 53 (TCP)</td><td><span class="{{ 'val-ok' if data.port53t_serv == 'OK' else 'val-err' }}">{{ data.port53t_serv }}</span> ({{ data.port53t_lat|default(0)|round(0) }}ms)</td></tr>
-                    <tr><td class="label">Port 443 (DoH)</td><td><span class="{{ 'val-ok' if data.doh == 'OK' else 'val-err' }}">{{ data.doh }}</span> ({{ data.doh_lat|default(0)|round(0) }}ms)</td></tr>
-                    <tr><td class="label">Port 853 (DoT)</td><td><span class="{{ 'val-ok' if data.dot == 'OK' else 'val-err' }}">{{ data.dot }}</span> ({{ data.dot_lat|default(0)|round(0) }}ms)</td></tr>
-                    <tr><td class="label">Version String</td><td><span class="{{ 'val-none' if data.version in ['UNREACHABLE', 'HIDDEN', 'TIMEOUT'] else 'val-ok' }}">{{ data.version }}</span> ({{ data.version_lat|default(0)|round(0) }}ms)</td></tr>
-                    <tr><td class="label">Groups</td><td>{{ data.groups }}</td></tr>
-                    <tr><td class="label">DoH / DoT</td><td>{{ data.doh }} / {{ data.dot }}</td></tr>
-                </table>
-            </div>
-            {% endfor %}
+<div class="container" id="app">
+    <header>
+        <div class="brand">
+            <h1>Forensic Analysis Console</h1>
+            <p id="sub-header">Scanning infrastructure...</p>
         </div>
-
-        <!-- PHASE 2: ZONES -->
-        <div class="section-title"><span>2</span> Zone Integrity & Synchronization</div>
-        <div class="grid">
-            {% for zone in zones %}
-            <div class="card" {% if zone.status == 'UNREACHABLE' %}style="opacity: 0.6;"{% endif %}>
-                <div class="card-header">
-                    <h3>{{ zone.domain }}</h3>
-                    <span class="badge {% if zone.status == 'UNREACHABLE' %}bg-neutral{% elif zone.axfr_vulnerable %}bg-danger{% else %}bg-success{% endif %}">
-                        {{ zone.status if zone.status == 'UNREACHABLE' else ('AXFR OPEN' if zone.axfr_vulnerable else 'AXFR SAFE') }}
-                    </span>
-                </div>
-                <table class="stats-table">
-                    <tr><td class="label">Server</td><td>{{ zone.server }}</td></tr>
-                    <tr><td class="label">SOA Serial</td><td><code>{{ zone.serial }}</code></td></tr>
-                    <tr><td class="label">AXFR Details</td><td>{{ zone.axfr_detail }}</td></tr>
-                </table>
-            </div>
-            {% endfor %}
+        <div class="search-container">
+            <span class="search-icon">🔍</span>
+            <input type="text" class="global-search" id="global-search" placeholder="Search tables (domain, IP, status...)" onkeyup="uiRenderer.applyFilter(this.value)">
         </div>
+        <div class="controls" style="display:flex; gap:10px">
+            <select id="report-selector" onchange="dataManager.switchTo(this.value)">
+                <option value="">Awaiting Index...</option>
+            </select>
+            <button class="btn" onclick="document.getElementById('file-input').click()">Import JSONs</button>
+            <input type="file" id="file-input" multiple accept=".json" style="display:none" onchange="dataManager.handleFiles(event)">
+        </div>
+    </header>
 
-        <!-- PHASE 3: RECORDS -->
-        <div class="section-title"><span>3</span> Distributed Record Consistency</div>
-        <div class="grid">
-            {% for result in results %}
-            <div class="card" {% if result.status == 'UNREACHABLE' %}style="opacity: 0.6;"{% endif %}>
-                <div class="card-header">
-                    <h3>{{ result.domain }} <small style="color:var(--text-muted)">[{{ result.type }}]</small></h3>
-                    <span class="badge {% if result.status == 'NOERROR' %}bg-success{% elif result.status == 'NXDOMAIN' %}bg-warning{% elif result.status == 'UNREACHABLE' %}bg-neutral{% else %}bg-danger{% endif %}">
-                        {{ result.status }}
-                    </span>
-                </div>
-                <table class="stats-table">
-                    <tr><td class="label">Server / Group</td><td>{{ result.server }} <span style="font-size:0.75rem">({{ result.group }})</span></td></tr>
-                    <tr><td class="label">Consistency</td><td><span class="{{ 'val-ok' if result.internally_consistent == 'YES' else ('val-none' if result.internally_consistent == 'N/A' else 'val-err') }}">{{ result.internally_consistent }}</span></td></tr>
-                    <tr><td class="label">Latency</td><td>{{ result.latency|default(0)|round(1) }}ms</td></tr>
-                    {% if result.nsid %}<tr><td class="label">NSID</td><td>{{ result.nsid }}</td></tr>{% endif %}
-                </table>
-                <div class="answers-box">
-                    <strong>Answers:</strong><br>
-                    {{ result.answers }}
-                </div>
+    <div id="source-drop" class="source-box" ondragover="this.classList.add('active'); event.preventDefault()" ondragleave="this.classList.remove('active')" ondrop="dataManager.handleDrop(event)">
+        <div style="font-size:18px; font-weight:800; color:#fff">Forensic Payload Missing</div>
+        <p style="font-size:13px; color:var(--text-secondary); margin-top:8px">Drop <code>report_*.json</code> files here to begin analysis.</p>
+    </div>
+
+    <div class="radar-strip" id="incident-radar"></div>
+    <div class="analytics-strip" id="global-analytics"></div>
+
+    <div class="charts-container" id="charts-panel" style="display:none">
+        <div class="chart-box"><div class="metric-label">Security & Privacy Trends</div><div id="sec-priv-chart"></div></div>
+        <div class="chart-box"><div class="metric-label">Success Rate (%)</div><div id="success-chart"></div></div>
+        <div class="chart-box"><div class="metric-label">Divergence Load</div><div id="div-chart"></div></div>
+    </div>
+
+    <div id="details-view" style="display:none">
+        <div class="forensic-panel">
+            <div class="panel-header" onclick="dataManager.toggleSection('p1')">
+                <div class="panel-title">01 INFRASTRUCTURE VULNERABILITIES</div>
+                <div class="panel-analytics" id="p1-analytics"></div>
             </div>
-            {% endfor %}
+            <div class="table-area" id="p1-content"></div>
+        </div>
+        <div class="forensic-panel">
+            <div class="panel-header" onclick="dataManager.toggleSection('p2')">
+                <div class="panel-title">02 ZONE INTEGRITY & COMPLIANCE</div>
+                <div class="panel-analytics" id="p2-analytics"></div>
+            </div>
+            <div class="table-area collapsed" id="p2-content"></div>
+        </div>
+        <div class="forensic-panel">
+            <div class="panel-header" onclick="dataManager.toggleSection('p3')">
+                <div class="panel-title">03 SEMANTIC RECORD CONSISTENCY</div>
+                <div class="panel-analytics" id="p3-analytics"></div>
+            </div>
+            <div class="table-area collapsed" id="p3-content"></div>
         </div>
     </div>
+</div>
+
+<script>
+    const dataManager = {
+        reports: [],
+        current: null,
+        index: [],
+        sortKey: '',
+        sortDesc: false,
+
+        async init() {
+            try {
+                const r = await fetch('reports_index.json');
+                if (r.ok) {
+                    const d = await r.json();
+                    this.index = d.reports || [];
+                    this.updateSelector();
+                    if (this.index.length > 0) this.loadReport(this.index[0]);
+                }
+            } catch(e) {}
+        },
+
+        updateSelector() {
+            const s = document.getElementById('report-selector');
+            s.innerHTML = this.index.map(f => `<option value="${f}">${f}</option>`).join('');
+        },
+
+        async loadReport(file) {
+            try {
+                const r = await fetch(file);
+                const d = await r.json();
+                this.addReport(d, file);
+            } catch(e) {}
+        },
+
+        addReport(data, file) {
+            if (!this.reports.find(r => r._file === file)) {
+                data._file = file;
+                this.reports.push(data);
+                this.reports.sort((a,b) => b.summary.timestamp.localeCompare(a.summary.timestamp));
+                if (!this.index.includes(file)) {
+                    this.index.push(file);
+                    this.updateSelector();
+                }
+            }
+            this.switchTo(file);
+        },
+
+        switchTo(file) {
+            const r = this.reports.find(r => r._file === file);
+            if (!r) return;
+            this.current = r;
+            document.getElementById('report-selector').value = file;
+            uiRenderer.renderAll();
+            trendAnalyzer.render();
+            document.getElementById('source-drop').style.display = 'none';
+            document.getElementById('details-view').style.display = 'block';
+            document.getElementById('charts-panel').style.display = 'grid';
+        },
+
+        handleFiles(e) {
+            Array.from(e.target.files).forEach(f => {
+                const reader = new FileReader();
+                reader.onload = (ev) => this.addReport(JSON.parse(ev.target.result), f.name);
+                reader.readAsText(f);
+            });
+        },
+
+        handleDrop(e) {
+            e.preventDefault();
+            this.handleFiles({ target: { files: e.dataTransfer.files } });
+        },
+
+        toggleSection(id) {
+            document.getElementById(id + '-content').classList.toggle('collapsed');
+        },
+
+        setSort(key) {
+            if (this.sortKey === key) this.sortDesc = !this.sortDesc;
+            else { this.sortKey = key; this.sortDesc = false; }
+            uiRenderer.renderDetails();
+        }
+    };
+
+    const uiRenderer = {
+        filter: '',
+
+        renderAll() {
+            this.renderGlobal();
+            this.renderRadar();
+            this.renderDetails();
+        },
+
+        renderGlobal() {
+            const s = dataManager.current.summary;
+            const meta = dataManager.current.metadata;
+            document.getElementById('sub-header').innerText = `Analysis: ${meta.arguments.domains} @ ${new Date(s.timestamp).toLocaleString()}`;
+            
+            const metrics = [
+                { l: 'Security Score', v: s.security_score + '%', c: this.getClr(s.security_score) },
+                { l: 'Privacy Score', v: s.privacy_score + '%', c: this.getClr(s.privacy_score) },
+                { l: 'Health Grade', v: s.global_grade, c: s.global_grade.includes('A') ? 'var(--success)' : 'var(--danger)' },
+                { l: 'Queries OK', v: ((s.success_queries / s.total_queries)*100).toFixed(1) + '%', sub: `${s.success_queries}/${s.total_queries}` },
+                { l: 'Divergences', v: s.divergences, c: s.divergences > 0 ? 'var(--danger)' : 'var(--success)' },
+                { l: 'Duration', v: s.execution_time_s + 's' }
+            ];
+
+            document.getElementById('global-analytics').innerHTML = metrics.map(m => `
+                <div class="metric-card">
+                    <div class="metric-label">${m.l}</div>
+                    <div class="metric-value" style="color:${m.c || '#fff'}">${m.v}</div>
+                    <div class="metric-sub">${m.sub || ''}</div>
+                </div>`).join('');
+        },
+
+        renderRadar() {
+            const det = dataManager.current.detailed_results;
+            const infra = Object.values(det.infrastructure);
+            
+            const counts = {
+                'Open Resolver': infra.filter(i => i.open_resolver === 'OPEN').length,
+                'Lame Delegation': det.zones.filter(z => !z.aa && z.status === 'NOERROR').length,
+                'Divergence': det.records.filter(r => r.internally_consistent === 'DIV!').length,
+                'Low TTL': det.records.filter(r => r.findings && r.findings.some(f => f.includes('TTL'))).length,
+                'Desync': det.zones.filter(z => !z.zone_is_synced).length
+            };
+
+            document.getElementById('incident-radar').innerHTML = Object.entries(counts).map(([l, v]) => `
+                <div class="radar-item ${v > 0 ? 'danger' : 'safe'}">
+                    <span class="badge ${v > 0 ? 'badge-danger' : 'badge-success'}">${v}</span> ${l}
+                </div>`).join('');
+        },
+
+        applyFilter(v) { this.filter = v.toLowerCase(); this.renderDetails(); },
+        getClr(s) { return s >= 90 ? 'var(--success)' : (s >= 70 ? 'var(--warning)' : 'var(--danger)'); },
+        highlight(t) { return this.filter ? String(t).replace(new RegExp(`(${this.filter})`, 'gi'), '<span class="text-match">$1</span>') : t; },
+
+        renderDetails() {
+            this.renderP1();
+            this.renderP2();
+            this.renderP3();
+        },
+
+        renderP1() {
+            const data = Object.entries(dataManager.current.detailed_results.infrastructure).map(([ip, d]) => ({ ip, ...d }));
+            const filtered = data.filter(d => JSON.stringify(d).toLowerCase().includes(this.filter));
+            
+            const insights = dataManager.current.analytics.phase1_infrastructure || {};
+            document.getElementById('p1-analytics').innerHTML = Object.entries(insights).map(([k,v]) => `<div style="font-size:10px">${k}: <b>${v}</b></div>`).join('');
+
+            let html = `<table><thead><tr><th>Group</th><th>IP Address</th><th>Ping</th><th>U53</th><th>T53</th><th>DoT</th><th>DoH</th><th>Score</th><th>OpenRes</th></tr></thead><tbody>`;
+            filtered.forEach(d => {
+                html += `<tr class="${d.open_resolver==='OPEN'?'anomaly-row':''}">
+                    <td>${this.highlight(d.groups)}</td>
+                    <td>${this.highlight(d.ip)}</td>
+                    <td>${d.latency.toFixed(0)}ms</td>
+                    <td><span class="badge ${d.port53u_serv==='OK'?'badge-success':'badge-danger'}">${d.port53u_serv}</span></td>
+                    <td><span class="badge ${d.port53t_serv==='OK'?'badge-success':'badge-danger'}">${d.port53t_serv}</span></td>
+                    <td>${d.dot}</td><td>${d.doh}</td>
+                    <td style="color:${this.getClr(d.infrastructure_score)}">${d.infrastructure_score}</td>
+                    <td><span class="badge ${d.open_resolver==='SAFE'?'badge-success':'badge-danger'}">${d.open_resolver}</span></td>
+                </tr>`;
+            });
+            document.getElementById('p1-content').innerHTML = html + '</tbody></table>';
+        },
+
+        renderP2() {
+            const data = dataManager.current.detailed_results.zones;
+            const filtered = data.filter(d => JSON.stringify(d).toLowerCase().includes(this.filter));
+            
+            const insights = dataManager.current.analytics.phase2_zones || {};
+            document.getElementById('p2-analytics').innerHTML = Object.entries(insights).map(([k,v]) => `<div style="font-size:10px">${k}: <b>${v}</b></div>`).join('');
+
+            let html = `<table><thead><tr><th>Domain</th><th>Server</th><th>Serial</th><th>Lat</th><th>Score</th><th>AA</th><th>AXFR</th></tr></thead><tbody>`;
+            filtered.forEach(d => {
+                html += `<tr class="${!d.zone_is_synced ? 'anomaly-row' : ''}">
+                    <td>${this.highlight(d.domain)}</td><td>${this.highlight(d.server)}</td><td>${d.serial}</td><td>${d.latency}ms</td>
+                    <td style="color:${this.getClr(d.zone_score)}">${d.zone_score}</td>
+                    <td>${d.aa?'OK':'--'}</td><td>${d.axfr_detail}</td>
+                </tr>`;
+            });
+            document.getElementById('p2-content').innerHTML = html + '</tbody></table>';
+        },
+
+        renderP3() {
+            const data = dataManager.current.detailed_results.records;
+            const filtered = data.filter(d => JSON.stringify(d).toLowerCase().includes(this.filter));
+            
+            const insights = dataManager.current.analytics.phase3_records || {};
+            document.getElementById('p3-analytics').innerHTML = Object.entries(insights).map(([k,v]) => `<div style="font-size:10px">${k}: <b>${v}</b></div>`).join('');
+
+            let html = `<table><thead><tr><th>Domain</th><th>Server</th><th>Type</th><th>Status</th><th>Lat</th><th>Sync</th></tr></thead><tbody>`;
+            filtered.forEach(d => {
+                html += `<tr class="${d.internally_consistent==='DIV!'?'anomaly-row':''}">
+                    <td>${this.highlight(d.domain)}</td><td>${this.highlight(d.server)}</td><td>${d.type}</td>
+                    <td><span class="badge ${d.status==='NOERROR'?'badge-success':'badge-danger'}">${d.status}</span></td>
+                    <td>${d.latency.toFixed(1)}ms</td><td>${d.internally_consistent}</td>
+                </tr>`;
+                if (d.findings && d.findings.length > 0) {
+                    html += `<tr><td colspan="6" style="padding:5px 40px; font-size:11px; color:var(--text-secondary)">
+                        ${d.findings.map(f => `↳ <span style="color:var(--warning)">!</span> ${this.highlight(f)}`).join('<br>')}
+                    </td></tr>`;
+                }
+            });
+            document.getElementById('p3-content').innerHTML = html + '</tbody></table>';
+        }
+    };
+
+    const trendAnalyzer = {
+        render() {
+            if (dataManager.reports.length < 2) return;
+            const rs = [...dataManager.reports].reverse();
+            this.plot('sec-priv-chart', [{l:'Sec', k:'security_score', c:'var(--success)'}, {l:'Priv', k:'privacy_score', c:'var(--accent)'}], rs);
+            this.plot('success-chart', [{l:'OK', k:'success_queries', c:'var(--info)', tf: (v,r) => (v/r.summary.total_queries)*100}], rs);
+            this.plot('div-chart', [{l:'DIV', k:'divergences', c:'var(--danger)'}], rs);
+        },
+
+        plot(id, lines, rs) {
+            const w = 400, h = 100, p = 20, step = (w-p*2)/(rs.length-1);
+            let svg = `<svg viewBox="0 0 ${w} ${h}" class="chart-svg">`;
+            lines.forEach(l => {
+                const vals = rs.map(r => l.tf ? l.tf(r.summary[l.k], r) : r.summary[l.k]);
+                const max = Math.max(...vals, 100);
+                const pts = vals.map((v, i) => `${p + i*step},${h - p - (v/max)*(h-p*2)}`);
+                svg += `<path class="line-path" d="M ${pts.join(' L ')}" style="stroke:${l.c}" />`;
+                pts.forEach((pt, i) => {
+                    const [x,y] = pt.split(',');
+                    svg += `<circle class="data-point" cx="${x}" cy="${y}" style="stroke:${l.c}" onclick="dataManager.switchTo('${rs[i]._file}')"><title>${l.l}: ${vals[i].toFixed(1)}</title></circle>`;
+                });
+            });
+            document.getElementById(id).innerHTML = svg + '</svg>';
+        }
+    };
+
+    window.onload = () => dataManager.init();
+</script>
 </body>
 </html>

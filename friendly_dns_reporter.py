@@ -5,7 +5,7 @@
 =============================================================================
 FRIENDLY DNS REPORTER
 =============================================================================
-Version: 6.8.0
+Version: 6.9.1
 Author: flashbsb
 Description: 3-Phase Automated DNS diagnostics for Windows and Linux.
 =============================================================================
@@ -171,6 +171,7 @@ def compare_consistency(queries, settings):
 
 def run_phase1_infrastructure(servers, srv_groups, conn, dns_engine, settings, lock):
     """Phase 1: Deep Infrastructure Check (Once per server)."""
+    ui.print_phase("1: Server Infrastructure")
     phase_start_time = time.time()
     infra_results = {}
     
@@ -334,6 +335,11 @@ def run_phase1_infrastructure(servers, srv_groups, conn, dns_engine, settings, l
         insights["Network Health"] = f"{sla_health:.1f}% (Latency SLA)"
 
     phase_duration = time.time() - phase_start_time
+    insights["Execution Time"] = f"{phase_duration:.2f}s"
+    insights["Total Servers"] = len(infra_results)
+    insights["Status Alive"] = alive
+    insights["Status Dead"] = dead
+
     if settings.enable_ui_legends:
         ui.print_legend_phase1_table()
 
@@ -352,6 +358,7 @@ def run_phase1_infrastructure(servers, srv_groups, conn, dns_engine, settings, l
 
 def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache, lock):
     """Phase 2: Zone Integrity & SOA Synchronization."""
+    ui.print_phase("2: Zone Integrity")
     phase_start_time = time.time()
     zone_results = []
     zones = {} # domain -> list of (server, group_name)
@@ -618,6 +625,7 @@ def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache,
 
 def run_phase3_records(tasks, dns_engine, dns_groups, settings, infra_cache, results, lock):
     """Phase 3: Parallel Record Consistency Check."""
+    ui.print_phase("3: Record Consistency")
     phase_start_time = time.time()
     counters = {'done': 0}
     total = len(tasks)
@@ -832,7 +840,8 @@ def calculate_scores(infra_results, zone_results):
         if res.get('dnssec') == "OK": s += 20
         if res.get('cookies') is True: s += 20
         if res.get('edns0') == "OK": s += 10
-        if res.get('open_resolver') == "SAFE": s += 10
+        # Only REFUSED is considered explicitly SAFE by user request
+        if res.get('open_resolver') == "REFUSED": s += 10
         if not res.get('web_risks'): s += 10
         vuln_axfr = any(z['axfr_vulnerable'] for z in zone_results if z['server'] == srv)
         if not vuln_axfr: s += 20
@@ -846,7 +855,7 @@ def calculate_scores(infra_results, zone_results):
         if res.get('doh') == "OK": p += 15
         if res.get('qname_min') is True: p += 30
         if res.get('ecs') is False: p += 20
-        if res.get('open_resolver') == "SAFE": p += 20
+        if res.get('open_resolver') == "REFUSED": p += 20
         total_priv += p
         
     return int(total_sec / server_count), int(total_priv / server_count)
@@ -883,7 +892,7 @@ def main():
         run_p2 = "2" in selected
         run_p3 = "3" in selected
 
-    ui.print_banner("v6.8.0")
+    ui.print_banner("v6.9.0")
     ui.print_disclaimer()
     ui.print_header(settings.max_threads, settings.consistency_checks, os.path.basename(args.domains))
     
@@ -903,16 +912,15 @@ def main():
     
     # Identify which groups are actually used in domains.csv
     active_groups = set()
-    for entry in domains_raw:
-        for group in (entry.get('GROUPS') or '').split(','):
-            active_groups.add(group.strip().upper())
-            
+    for d in domains_raw:
+        if d.get('GROUPS'):
+            active_groups.update([g.strip().upper() for g in d['GROUPS'].split(',')])
+    
     # Collect servers and create a reverse mapping
     all_servers = set()
     srv_to_groups = {}
     for group, g_meta in dns_groups.items():
-        # Only process if it's an active group OR if filtering is disabled
-        if not settings.only_test_active_groups or group in active_groups:
+        if group in active_groups:
             all_servers.update(g_meta["servers"])
             for s in g_meta["servers"]:
                 if s not in srv_to_groups: srv_to_groups[s] = []
@@ -921,37 +929,42 @@ def main():
     # Format groups as strings
     for s in srv_to_groups:
         srv_to_groups[s] = ", ".join(srv_to_groups[s])
-            
-    if not all_servers:
-        print(f"[{ui.FAIL}ERROR{ui.RESET}] No active servers found for the specified domains.")
-        sys.exit(1)
-    
+
     infra_cache = {}
+    
+    # Run Phase 1: Infrastructure
     p1_insights = {}
     if run_p1:
-        ui.print_phase("1: Server Infrastructure")
         infra_cache, p1_insights = run_phase1_infrastructure(all_servers, srv_to_groups, conn, dns_engine, settings, lock)
-    
+
+    # Filter out dead servers for subsequent phases
+    alive_groups = {}
+    for g_name, g_meta in dns_groups.items():
+        if isinstance(g_meta, dict) and "servers" in g_meta:
+            alive_servers = [s for s in g_meta["servers"] if s in infra_cache and not infra_cache[s].get('is_dead')]
+            if alive_servers:
+                alive_groups[g_name] = alive_servers
+
+    # Run Phase 2: Zones
     zone_results = []
     p2_insights = {}
     if run_p2:
-        ui.print_phase("2: Zone Integrity")
         zone_results, p2_insights = run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache, lock)
-    
+
+    # Run Phase 3: Records
     results = []
     p3_insights = {}
     if run_p3:
-        ui.print_phase("3: Record Consistency")
         tasks = []
         for entry in domains_raw:
-            domain = entry.get('DOMAIN')
-            if not domain: continue
-            targets = [domain] + [f"{h.strip()}.{domain}" for h in (entry.get('EXTRA') or '').split(',') if h.strip()]
-            for target in targets:
-                for group in (entry.get('GROUPS') or '').split(','):
+            groups = (entry.get('GROUPS') or '').split(',')
+            target = entry.get('DOMAIN')
+            if target:
+                for group in groups:
                     group = group.strip().upper()
-                    for server in dns_groups.get(group, {}).get("servers", []):
-                        tasks.append((target, group, server, (entry.get('RECORDS') or '').split(',')))
+                    if group in dns_groups:
+                        for server in dns_groups[group]["servers"]:
+                            tasks.append((target, group, server, (entry.get('RECORDS') or '').split(',')))
         results, p3_insights = run_phase3_records(tasks, dns_engine, dns_groups, settings, infra_cache, results, lock)
 
     # Final Analytics Calculation
@@ -959,15 +972,15 @@ def main():
     avg_score = (sec_score + priv_score) / 2
     grade = ui.format_grade(avg_score).replace("\033[92m", "").replace("\033[91m", "").replace("\033[93m", "").replace("\033[0m", "")
     final_summary = {
-        "Total Queries": len(results),
-        "Success (OK)": sum(1 for r in results if r['status'] == "NOERROR"),
-        "Divergences (DIV!)": sum(1 for r in results if r['internally_consistent'] == "DIV!"),
-        "Sync/Zone Issues": sum(1 for z in zone_results if z['serial'] == "?" or z['status'] == "UNREACHABLE"),
-        "Security Score": sec_score,
-        "Privacy Score": priv_score,
-        "Global Grade": grade,
-        "Execution Time (s)": round(time.time() - script_start_time, 2),
-        "Timestamp": datetime.now().isoformat()
+        "total_queries": len(results),
+        "success_queries": sum(1 for r in results if r['status'] == "NOERROR"),
+        "divergences": sum(1 for r in results if r['internally_consistent'] == "DIV!"),
+        "zone_sync_issues": sum(1 for z in zone_results if z['serial'] == "?" or z['status'] == "UNREACHABLE"),
+        "security_score": sec_score,
+        "privacy_score": priv_score,
+        "global_grade": grade,
+        "execution_time_s": round(time.time() - script_start_time, 2),
+        "timestamp": datetime.now().isoformat()
     }
 
     # Reporting & Summary
@@ -976,8 +989,8 @@ def main():
     
     report_data = {
         "metadata": {
-            "version": "v6.8.0",
-            "timestamp": final_summary["Timestamp"],
+            "version": "6.9.1",
+            "timestamp": final_summary["timestamp"],
             "arguments": vars(args),
             "system_info": {
                 "os": platform.system(),
@@ -1006,7 +1019,8 @@ def main():
     suffix = f"_{datetime.now().strftime('%Y%m%d_%H%M')}" if settings.enable_report_timestamps else ""
     
     paths = {}
-    if settings.enable_json_report: 
+    # Ensure JSON is generated if HTML is enabled (as HTML now depends on it)
+    if settings.enable_json_report or settings.enable_html_report:
         paths["JSON"] = reporter.export_json(report_data, f"report{suffix}.json")
     
     if settings.enable_csv_report:
@@ -1041,11 +1055,18 @@ def main():
         paths["CSV_SUM_FINAL"] = reporter.export_csv([final_summary], f"summary_final{suffix}.csv", list(final_summary.keys()))
 
     if settings.enable_html_report: 
+        # Scan for existing JSON reports in the same directory for history visualization
+        json_path = paths.get("JSON")
+        history_files = []
+        if json_path:
+            json_dir = os.path.dirname(json_path)
+            if os.path.exists(json_dir):
+                history_files = [f for f in os.listdir(json_dir) if f.lower().endswith(".json")]
+        
         html_context = {
-            "summary": final_summary,
-            "infrastructure": infra_cache,
-            "zones": zone_results,
-            "results": results
+            "dataset_name": os.path.basename(args.domains),
+            "report_file": os.path.basename(json_path) if json_path else f"report{suffix}.json",
+            "history_files": history_files
         }
         paths["HTML"] = reporter.generate_html(html_context, f"dashboard{suffix}.html")
     

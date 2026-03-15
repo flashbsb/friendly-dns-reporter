@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [6.9.1] - 2026-03-15
+### Changed
+- **Terminal UI Consolidation**: Eliminated redundant phase headers and legends in terminal output for a cleaner diagnostic flow.
+- **Version Polish**: Incremented to 6.9.1 reflecting terminal presentation refinements.
+
+## [6.9.0] - 2026-03-15
+### Added
+- **Forensic Analysis Console**: Completely redesigned `dashboard.html` with a premium dark-mode UI for technical auditors.
+- **Global Forensic Search**: Real-time filtering across all diagnostic phases with keyword highlighting in tables.
+- **Incident Radar Strip**: New high-visibility tracker for critical anomalies (Open Resolvers, Lame Delegations, DIV!, Desync).
+- **Interactive SVG Trend Charts**: Replaced static charts with lightweight, high-performance SVG line charts for historical tracking.
+- **Forensic Table Highlights**: Automatic red highlighting for anomalous rows and integrated finding density displays.
+- **Execution Performance Tracking**: Real-time script execution duration now exported to all reporting formats (Terminal, JSON, HTML).
+
+### Changed
+- **Version Milestone**: Incremented to 6.9.0 reflecting the UI/UX transformation.
+- **Architecture Refinement**: Modularized dashboard JavaScript for improved maintenance and dual-mode data loading.
+
 ## [6.8.0] - 2026-03-15
 ### Added
 - **Professional JSON Execution Metadata**: Integrated `metadata` section in `report.json` containing script version, CLI arguments, system information (OS/Python), and runtime configuration.

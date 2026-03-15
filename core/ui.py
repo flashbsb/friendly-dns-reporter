@@ -26,9 +26,9 @@ def format_grade(score):
     if score >= 60: return f"{WARN}D{RESET}"
     return f"{FAIL}F{RESET}"
 
-def print_banner(version=""):
+def print_banner(version="6.9.1"):
     print("\n" + "=" * 80)
-    print(f"{BOLD}FRIENDLY DNS REPORTER v6.8.0{RESET}")
+    print(f"{BOLD}FRIENDLY DNS REPORTER {version}{RESET}")
     print("=" * 80)
 
 def print_disclaimer():
@@ -98,7 +98,7 @@ def print_summary_table(total, success, fail, div, sync_issues, reports, duratio
     avg_score = (sec_score + priv_score) / 2
     print(f"  {BOLD}GLOBAL HEALTH GRADE : {format_grade(avg_score)} ({avg_score:.1f}%){RESET}")
     
-    print(f"  Total Execution Time : {duration:.2f}s")
+    print(f"  {BOLD}TOTAL EXECUTION TIME: {duration:.2f}s{RESET}")
     
     if show_legend:
         print("-" * 80)

@@ -1,4 +1,5 @@
 infos/
+*test*
 
 # Python
 __pycache__/
