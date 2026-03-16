@@ -6,63 +6,138 @@
     <title>Friendly DNS Reporter - Forensic Console</title>
     <style>
         :root {
-            --bg: #090b10;
-            --card-bg: #11141a;
-            --header-bg: #181b1f;
-            --border: #222529;
-            --text-primary: #d8d9da;
-            --text-secondary: #949a9e;
-            --accent: #3274d9;
-            --success: #56a64b;
-            --warning: #f2cc0c;
-            --danger: #e02f44;
-            --info: #3274d9;
-            --highlight-bg: rgba(224, 47, 68, 0.08);
+            --bg: #0b1220;
+            --bg-glow: radial-gradient(circle at top left, rgba(61, 139, 253, 0.18), transparent 36%), radial-gradient(circle at top right, rgba(239, 68, 68, 0.16), transparent 32%), linear-gradient(180deg, #0b1220 0%, #081018 100%);
+            --card-bg: rgba(16, 24, 39, 0.82);
+            --card-strong: rgba(18, 29, 48, 0.95);
+            --header-bg: rgba(10, 16, 28, 0.9);
+            --border: rgba(148, 163, 184, 0.14);
+            --text-primary: #e5edf7;
+            --text-secondary: #93a4ba;
+            --accent: #5ea8ff;
+            --accent-2: #7dd3fc;
+            --success: #4ade80;
+            --warning: #f59e0b;
+            --danger: #fb7185;
+            --info: #60a5fa;
+            --highlight-bg: rgba(251, 113, 133, 0.09);
+            --shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: 'Inter', system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text-primary); line-height: 1.5; padding: 20px; font-weight: 400; }
-        .container { max-width: 1600px; margin: 0 auto; }
+        body { font-family: 'Segoe UI', 'Trebuchet MS', sans-serif; background: var(--bg-glow); color: var(--text-primary); line-height: 1.5; padding: 20px; font-weight: 400; }
+        .container { max-width: 1640px; margin: 0 auto; }
 
-        header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 25px; gap: 20px; border-bottom: 1px solid var(--border); padding-bottom: 20px; position: sticky; top: 0; background: var(--bg); z-index: 100; }
-        .brand h1 { font-size: 24px; color: #fff; font-weight: 800; letter-spacing: -0.5px; }
-        .brand p { font-size: 13px; color: var(--text-secondary); margin-top: 4px; }
+        header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; gap: 20px; border: 1px solid var(--border); padding: 18px 20px; position: sticky; top: 0; background: rgba(8, 16, 24, 0.86); backdrop-filter: blur(12px); z-index: 100; border-radius: 18px; box-shadow: var(--shadow); }
+        .brand h1 { font-size: 28px; color: #fff; font-weight: 900; letter-spacing: -0.8px; }
+        .brand p { font-size: 13px; color: var(--text-secondary); margin-top: 6px; max-width: 560px; }
+        .brand-tag { display:inline-flex; align-items:center; gap:8px; padding:6px 10px; border:1px solid rgba(94,168,255,0.24); border-radius:999px; color: var(--accent-2); font-size:11px; text-transform:uppercase; letter-spacing:0.12em; margin-bottom:10px; background: rgba(94,168,255,0.08); }
         
         .search-container { position: relative; flex-grow: 1; max-width: 600px; }
-        .global-search { width: 100%; background: var(--card-bg); border: 1px solid var(--border); color: #fff; padding: 12px 20px 12px 45px; border-radius: 8px; font-size: 14px; transition: all 0.2s; }
+        .global-search { width: 100%; background: rgba(15, 23, 42, 0.82); border: 1px solid var(--border); color: #fff; padding: 12px 20px 12px 45px; border-radius: 12px; font-size: 14px; transition: all 0.2s; }
         .global-search:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(50, 116, 217, 0.2); }
         .search-icon { position: absolute; left: 15px; top: 50%; transform: translateY(-50%); color: var(--text-secondary); pointer-events: none; }
 
-        .analytics-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 25px; }
-        .metric-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 16px; border-bottom: 3px solid transparent; }
+        .hero { display:grid; grid-template-columns: minmax(340px, 1.3fr) minmax(260px, 0.8fr); gap:16px; margin-bottom: 18px; }
+        .hero-card, .hero-side { background: linear-gradient(180deg, rgba(17, 25, 40, 0.96), rgba(13, 20, 34, 0.92)); border: 1px solid var(--border); border-radius: 24px; box-shadow: var(--shadow); overflow:hidden; }
+        .hero-card { padding: 24px; position:relative; }
+        .hero-card::after { content:""; position:absolute; inset:auto -80px -80px auto; width:240px; height:240px; background: radial-gradient(circle, rgba(94,168,255,0.22), transparent 65%); pointer-events:none; }
+        .hero-kicker { font-size: 11px; text-transform: uppercase; letter-spacing: 0.18em; color: var(--accent-2); margin-bottom: 12px; }
+        .hero-title { font-size: 34px; line-height: 1.05; font-weight: 900; max-width: 760px; margin-bottom: 12px; }
+        .hero-sub { color: var(--text-secondary); max-width: 760px; font-size: 15px; }
+        .hero-stats { display:grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap:12px; margin-top: 22px; }
+        .hero-stat { background: rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); border-radius: 16px; padding: 14px; }
+        .hero-stat .value { font-size: 26px; font-weight: 900; color:#fff; }
+        .hero-stat .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-secondary); margin-top: 6px; }
+        .hero-side { padding: 18px; display:flex; flex-direction:column; gap:12px; }
+        .hero-risk { border-radius: 16px; padding: 14px 16px; border: 1px solid var(--border); background: rgba(255,255,255,0.03); }
+        .hero-risk.critical { background: rgba(251,113,133,0.12); border-color: rgba(251,113,133,0.32); }
+        .hero-risk.attention { background: rgba(245,158,11,0.11); border-color: rgba(245,158,11,0.28); }
+        .hero-risk.good { background: rgba(74,222,128,0.1); border-color: rgba(74,222,128,0.24); }
+        .hero-risk .risk-label { font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: var(--text-secondary); }
+        .hero-risk .risk-value { font-size: 28px; font-weight: 900; margin-top: 6px; }
+        .hero-risk .risk-sub { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+
+        .analytics-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 18px; }
+        .metric-card { background: var(--card-strong); border: 1px solid var(--border); border-radius: 16px; padding: 18px; border-bottom: 3px solid transparent; box-shadow: var(--shadow); }
         .metric-card.alert { border-bottom-color: var(--danger); }
-        .metric-label { font-size: 10px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 700; margin-bottom: 8px; }
-        .metric-value { font-size: 22px; font-weight: 800; color: #fff; display: flex; align-items: baseline; gap: 5px; }
-        .metric-sub { font-size: 11px; color: var(--text-secondary); margin-top: 4px; }
+        .metric-label { font-size: 10px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; margin-bottom: 10px; }
+        .metric-value { font-size: 26px; font-weight: 900; color: #fff; display: flex; align-items: baseline; gap: 5px; }
+        .metric-sub { font-size: 11px; color: var(--text-secondary); margin-top: 6px; }
 
-        .radar-strip { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 25px; }
-        .radar-item { display: flex; align-items: center; gap: 10px; background: rgba(50, 116, 217, 0.05); border: 1px solid var(--border); padding: 8px 15px; border-radius: 20px; font-size: 12px; font-weight: 600; }
-        .radar-item.danger { color: var(--danger); border-color: rgba(224, 47, 68, 0.3); background: rgba(224, 47, 68, 0.05); }
-        .radar-item.safe { color: var(--success); border-color: rgba(86, 166, 75, 0.3); background: rgba(86, 166, 75, 0.05); }
+        .action-board { display:grid; grid-template-columns: 1.25fr 1fr; gap:16px; margin-bottom: 18px; }
+        .action-card, .incident-panel { background: var(--card-strong); border: 1px solid var(--border); border-radius: 20px; box-shadow: var(--shadow); }
+        .action-card { padding: 18px; }
+        .section-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--accent-2); margin-bottom: 10px; }
+        .action-title { font-size: 20px; font-weight: 800; margin-bottom: 6px; }
+        .action-list { display:flex; flex-direction:column; gap:10px; margin-top:14px; }
+        .action-item { display:flex; gap:12px; padding:12px 14px; border:1px solid var(--border); border-radius: 14px; background: rgba(255,255,255,0.03); }
+        .action-item .marker { width:10px; min-width:10px; border-radius:999px; background: var(--warning); margin-top:6px; }
+        .action-item.critical .marker { background: var(--danger); box-shadow: 0 0 16px rgba(251,113,133,0.45); }
+        .action-item.good .marker { background: var(--success); box-shadow: 0 0 16px rgba(74,222,128,0.35); }
+        .action-item strong { display:block; font-size:14px; margin-bottom: 2px; }
+        .action-item span { font-size:12px; color: var(--text-secondary); }
 
-        .charts-container { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 15px; margin-bottom: 30px; }
-        .chart-box { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 15px; }
+        .incident-panel { padding: 18px; }
+        .incident-grid { display:grid; grid-template-columns: repeat(2, minmax(160px, 1fr)); gap:12px; margin-top: 12px; }
+        .incident-card { padding:16px; border-radius:18px; border:1px solid var(--border); background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02)); }
+        .incident-card.danger { border-color: rgba(251,113,133,0.35); background: linear-gradient(180deg, rgba(251,113,133,0.14), rgba(251,113,133,0.05)); }
+        .incident-card.warning { border-color: rgba(245,158,11,0.35); background: linear-gradient(180deg, rgba(245,158,11,0.13), rgba(245,158,11,0.05)); }
+        .incident-card.safe { border-color: rgba(74,222,128,0.3); background: linear-gradient(180deg, rgba(74,222,128,0.12), rgba(74,222,128,0.05)); }
+        .incident-card .count { font-size: 34px; font-weight: 900; line-height:1; }
+        .incident-card .name { font-size: 13px; font-weight: 700; margin-top: 8px; }
+        .incident-card .desc { font-size: 11px; color: var(--text-secondary); margin-top: 6px; }
+
+        .help-panel { background: var(--card-strong); border: 1px solid var(--border); border-radius: 20px; box-shadow: var(--shadow); margin-bottom: 18px; overflow: hidden; }
+        .help-header { padding: 16px 18px; display:flex; justify-content:space-between; align-items:center; cursor:pointer; background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01)); }
+        .help-title { font-size: 18px; font-weight: 800; }
+        .help-content { padding: 18px; display:grid; grid-template-columns: 1.1fr 1fr 1fr; gap:16px; }
+        .help-card { border: 1px solid var(--border); border-radius: 16px; padding: 16px; background: rgba(255,255,255,0.025); }
+        .help-card h3 { font-size: 14px; margin-bottom: 10px; }
+        .help-card p { font-size: 12px; color: var(--text-secondary); margin-bottom: 10px; }
+        .help-card ul { list-style: none; display:flex; flex-direction:column; gap:8px; }
+        .help-card li { font-size: 12px; color: var(--text-primary); }
+        .help-card li span { color: var(--text-secondary); }
+
+        .help-chip { display:inline-flex; align-items:center; justify-content:center; width:18px; height:18px; border-radius:999px; background: rgba(94,168,255,0.14); color: var(--accent-2); font-size:11px; font-weight:800; margin-left:6px; vertical-align:middle; cursor:help; border:1px solid rgba(94,168,255,0.22); }
+        .help-tip { position: relative; display:inline-flex; align-items:center; }
+        .help-tip .help-bubble { position:absolute; bottom:130%; left:50%; transform:translateX(-50%); width:260px; background: rgba(10,16,28,0.96); border:1px solid var(--border); color: var(--text-primary); padding:10px 12px; border-radius: 12px; box-shadow: var(--shadow); font-size:11px; line-height:1.45; opacity:0; pointer-events:none; transition:opacity .16s ease, transform .16s ease; z-index:120; }
+        .help-tip:hover .help-bubble { opacity:1; transform:translateX(-50%) translateY(-4px); }
+        .help-tip .help-bubble strong { color:#fff; display:block; margin-bottom:4px; }
+
+        .charts-container { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 15px; margin-bottom: 24px; }
+        .chart-box { background: var(--card-strong); border: 1px solid var(--border); border-radius: 18px; padding: 16px; box-shadow: var(--shadow); }
         .chart-svg { width: 100%; height: 120px; overflow: visible; }
         .line-path { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
         .data-point { fill: #fff; stroke: var(--accent); stroke-width: 2; r: 3.5; cursor: pointer; }
         .data-point:hover { r: 5; }
+        .chart-empty { height: 120px; display: flex; align-items: center; justify-content: center; text-align: center; color: var(--text-secondary); font-size: 12px; border: 1px dashed var(--border); border-radius: 8px; }
+        .chart-fallback { height: 120px; display: flex; flex-direction: column; justify-content: center; gap: 8px; padding: 16px; border: 1px dashed var(--border); border-radius: 8px; }
+        .chart-fallback .big { font-size: 28px; font-weight: 800; color: #fff; }
+        .chart-fallback .label { font-size: 12px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.4px; }
+        .chart-fallback .sub { font-size: 12px; color: var(--text-secondary); }
 
-        .forensic-panel { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 30px; overflow: hidden; }
-        .panel-header { background: #1a1e23; padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; cursor: pointer; }
-        .panel-title { font-size: 14px; font-weight: 700; color: var(--accent); display: flex; align-items: center; gap: 10px; }
+        .phase-strip { display:grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); gap:14px; margin-bottom: 18px; }
+        .phase-card { background: var(--card-strong); border: 1px solid var(--border); border-radius: 18px; padding: 16px; box-shadow: var(--shadow); }
+        .phase-card h3 { font-size: 15px; margin-bottom: 10px; }
+        .phase-grid { display:grid; grid-template-columns: repeat(2, minmax(90px, 1fr)); gap:10px; }
+        .phase-metric { padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.05); }
+        .phase-metric .v { font-size: 20px; font-weight: 800; color:#fff; }
+        .phase-metric .l { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-secondary); margin-top: 4px; }
+
+        .forensic-panel { background: var(--card-strong); border: 1px solid var(--border); border-radius: 18px; margin-bottom: 22px; overflow: hidden; box-shadow: var(--shadow); }
+        .panel-header { background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01)); padding: 14px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; cursor: pointer; }
+        .panel-title { font-size: 14px; font-weight: 800; color: var(--accent); display: flex; align-items: center; gap: 10px; }
         .panel-analytics { display: flex; gap: 20px; }
         
         .table-area { overflow-x: auto; max-height: 600px; overflow-y: auto; }
-        table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; }
-        thead { position: sticky; top: 0; z-index: 10; background: #1a1e23; }
-        th { padding: 12px 15px; text-transform: uppercase; font-size: 11px; color: var(--text-secondary); font-weight: 700; border-bottom: 1px solid var(--border); cursor: pointer; }
-        td { padding: 12px 15px; border-bottom: 1px solid var(--border); color: #cdd1d4; }
-        tr.anomaly-row td { background: var(--highlight-bg); }
+        table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; table-layout: fixed; }
+        thead { position: sticky; top: 0; z-index: 10; background: #172233; }
+        th { padding: 12px 15px; text-transform: uppercase; font-size: 11px; color: var(--text-secondary); font-weight: 700; border-bottom: 1px solid var(--border); cursor: pointer; vertical-align: top; text-align: left; }
+        td { padding: 12px 15px; border-bottom: 1px solid var(--border); color: #d7dfeb; vertical-align: top; text-align: left; word-break: break-word; }
+        tr:nth-child(odd) td { background: rgba(255,255,255,0.015); }
+        tr.anomaly-row td { background: linear-gradient(90deg, rgba(251,113,133,0.18), rgba(251,113,133,0.05)); }
+        .detail-row td { padding: 8px 18px 12px 18px; font-size: 11px; color: var(--text-secondary); }
         
         .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 800; text-transform: uppercase; }
         .badge-danger { background: rgba(224, 47, 68, 0.15); color: #ff5f6d; }
@@ -71,11 +146,22 @@
         .badge-info { background: rgba(50, 116, 217, 0.15); color: #7fbcf5; }
 
         .text-match { background: rgba(242, 204, 12, 0.3); color: #fff; padding: 0 2px; border-radius: 2px; }
-        .source-box { border: 2px dashed var(--border); padding: 50px; text-align: center; border-radius: 12px; margin-bottom: 25px; }
+        .source-box { border: 2px dashed var(--border); padding: 50px; text-align: center; border-radius: 18px; margin-bottom: 25px; background: rgba(15,23,42,0.55); }
         .source-box.active { border-color: var(--accent); background: rgba(50, 116, 217, 0.05); }
         .collapsed { display: none; }
-        .btn { background: var(--header-bg); color: #fff; border: 1px solid var(--border); padding: 8px 15px; border-radius: 6px; font-size: 13px; cursor: pointer; }
-        select { background: #000; color: #fff; border: 1px solid var(--border); padding: 8px; border-radius: 6px; outline: none; }
+        .btn { background: var(--header-bg); color: #fff; border: 1px solid var(--border); padding: 8px 15px; border-radius: 10px; font-size: 13px; cursor: pointer; }
+        select { background: #000; color: #fff; border: 1px solid var(--border); padding: 8px; border-radius: 10px; outline: none; }
+
+        @media (max-width: 1024px) {
+            .hero, .action-board, .help-content, .phase-strip { grid-template-columns: 1fr; }
+            .hero-stats { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
+        }
+
+        @media (max-width: 720px) {
+            header { position: static; flex-direction: column; }
+            .hero-title { font-size: 26px; }
+            .hero-stats, .incident-grid { grid-template-columns: 1fr; }
+        }
     </style>
 </head>
 <body>
@@ -83,6 +169,7 @@
 <div class="container" id="app">
     <header>
         <div class="brand">
+            <div class="brand-tag">DNS Diagnostic Command Center</div>
             <h1>Forensic Analysis Console</h1>
             <p id="sub-header">Scanning infrastructure...</p>
         </div>
@@ -104,14 +191,77 @@
         <p style="font-size:13px; color:var(--text-secondary); margin-top:8px">Drop <code>report_*.json</code> files here to begin analysis.</p>
     </div>
 
-    <div class="radar-strip" id="incident-radar"></div>
+    <section class="hero" id="hero-section" style="display:none">
+        <div class="hero-card">
+            <div class="hero-kicker">Executive Snapshot</div>
+            <div class="hero-title" id="hero-title">Waiting for diagnostic context</div>
+            <div class="hero-sub" id="hero-subtitle">Load a report to transform raw checks into an actionable operational picture.</div>
+            <div class="hero-stats" id="hero-stats"></div>
+        </div>
+        <div class="hero-side" id="hero-side"></div>
+    </section>
+
+    <section class="action-board" id="action-board" style="display:none">
+        <div class="action-card">
+            <div class="section-label">What Needs Attention</div>
+            <div class="action-title">Priority-driven summary</div>
+            <div id="action-summary" class="action-list"></div>
+        </div>
+        <div class="incident-panel">
+            <div class="section-label">Priority Incidents</div>
+            <div class="action-title">Where to look first</div>
+            <div id="incident-radar" class="incident-grid"></div>
+        </div>
+    </section>
+
+    <section class="help-panel" id="help-panel" style="display:none">
+        <div class="help-header" onclick="dataManager.toggleSection('help-body')">
+            <div>
+                <div class="section-label">Interpretation Guide</div>
+                <div class="help-title">How to read this report</div>
+            </div>
+            <button class="btn">Toggle Guide</button>
+        </div>
+        <div class="help-content collapsed" id="help-body">
+            <div class="help-card">
+                <h3>How scoring works</h3>
+                <p>Scores summarize technical evidence. They are not verdicts, but fast indicators to guide attention.</p>
+                <ul>
+                    <li><strong>Security Score</strong> <span>combines DNSSEC data serving, cookies, EDNS, resolver restriction, web exposure, AXFR behavior, and CAA presence.</span></li>
+                    <li><strong>Privacy Score</strong> <span>combines DoT, DoH, heuristic QNAME minimization, and ECS behavior.</span></li>
+                    <li><strong>Global Grade</strong> <span>is derived from the available scores. When privacy does not apply, the grade becomes security-only.</span></li>
+                    <li><strong>N/A</strong> <span>means the metric was not applicable or Phase 1 data was not available.</span></li>
+                </ul>
+            </div>
+            <div class="help-card">
+                <h3>How to read the sections</h3>
+                <ul>
+                    <li><strong>Infrastructure</strong> <span>shows server reachability, DNS service health, encryption support, resolver exposure, and capability markers.</span></li>
+                    <li><strong>Zones</strong> <span>shows SOA visibility, synchronization, transfer exposure, DNSSEC, CAA, and whether the zone check was full or limited to SOA.</span></li>
+                    <li><strong>Records</strong> <span>shows consistency across repeated queries, contextual transport data, answer previews, and semantic findings such as dangling targets or policy issues.</span></li>
+                </ul>
+            </div>
+            <div class="help-card">
+                <h3>Interpretation hints</h3>
+                <ul>
+                    <li><strong>Open Resolver / PUBLIC</strong> <span>is usually critical because the server answered a third-party recursive request from the public internet.</span></li>
+                    <li><strong>Zone Desync</strong> <span>deserves attention when repeated across the same domain and multiple servers.</span></li>
+                    <li><strong>Divergence</strong> <span>may be expected with load balancing, but repeated divergence can also reveal instability or inconsistent policy.</span></li>
+                    <li><strong>SOA_ONLY</strong> <span>means the zone audit was incomplete, so findings must be interpreted carefully.</span></li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
     <div class="analytics-strip" id="global-analytics"></div>
 
     <div class="charts-container" id="charts-panel" style="display:none">
-        <div class="chart-box"><div class="metric-label">Security & Privacy Trends</div><div id="sec-priv-chart"></div></div>
-        <div class="chart-box"><div class="metric-label">Success Rate (%)</div><div id="success-chart"></div></div>
-        <div class="chart-box"><div class="metric-label">Divergence Load</div><div id="div-chart"></div></div>
+        <div class="chart-box"><div class="metric-label">Security & Privacy Trends <span class="help-tip"><span class="help-chip">?</span><span class="help-bubble"><strong>Security & Privacy Trends</strong>Shows how the report-level security and privacy scores evolve across multiple imported executions.</span></span></div><div id="sec-priv-chart"></div></div>
+        <div class="chart-box"><div class="metric-label">Success Rate (%) <span class="help-tip"><span class="help-chip">?</span><span class="help-bubble"><strong>Success Rate</strong>Percentage of record queries that completed successfully across the historical reports loaded into the dashboard.</span></span></div><div id="success-chart"></div></div>
+        <div class="chart-box"><div class="metric-label">Divergence Load <span class="help-tip"><span class="help-chip">?</span><span class="help-bubble"><strong>Divergence Load</strong>Tracks how many repeated record checks diverged across different runs, which may indicate instability or expected distribution behavior.</span></span></div><div id="div-chart"></div></div>
     </div>
+
+    <section class="phase-strip" id="phase-strip" style="display:none"></section>
 
     <div id="details-view" style="display:none">
         <div class="forensic-panel">
@@ -119,7 +269,7 @@
                 <div class="panel-title">01 INFRASTRUCTURE VULNERABILITIES</div>
                 <div class="panel-analytics" id="p1-analytics"></div>
             </div>
-            <div class="table-area" id="p1-content"></div>
+            <div class="table-area collapsed" id="p1-content"></div>
         </div>
         <div class="forensic-panel">
             <div class="panel-header" onclick="dataManager.toggleSection('p2')">
@@ -210,7 +360,11 @@
         },
 
         toggleSection(id) {
-            document.getElementById(id + '-content').classList.toggle('collapsed');
+            const direct = document.getElementById(id);
+            const section = direct || document.getElementById(id + '-content');
+            if (section) {
+                section.classList.toggle('collapsed');
+            }
         },
 
         setSort(key) {
@@ -223,24 +377,181 @@
     const uiRenderer = {
         filter: '',
 
+        escapeAttr(value) {
+            return String(value)
+                .replace(/&/g, '&amp;')
+                .replace(/"/g, '&quot;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+        },
+
+        help(label, title, body) {
+            const tooltip = `${title}: ${body}`;
+            const escaped = this.escapeAttr(tooltip);
+            return `${label}<span class="help-tip" title="${escaped}" aria-label="${escaped}"><span class="help-chip">?</span><span class="help-bubble"><strong>${title}</strong>${body}</span></span>`;
+        },
+
         renderAll() {
+            this.renderHero();
             this.renderGlobal();
             this.renderRadar();
+            this.renderActionSummary();
+            this.renderPhaseSummary();
             this.renderDetails();
+            document.getElementById('help-panel').style.display = 'block';
+            document.getElementById('phase-strip').style.display = 'grid';
+        },
+
+        renderPhaseSummary() {
+            const det = dataManager.current.detailed_results;
+            const infra = Object.values(det.infrastructure || {});
+            const zones = det.zones || [];
+            const records = det.records || [];
+
+            const phaseCards = [
+                {
+                    title: 'Phase 1 Coverage',
+                    metrics: [
+                        { v: infra.length, l: 'Servers' },
+                        { v: infra.filter(i => !i.is_dead).length, l: 'Alive' },
+                        { v: infra.filter(i => i.is_dead).length, l: 'Dead' },
+                        { v: infra.filter(i => i.resolver_exposed === true).length, l: 'Public' }
+                    ]
+                },
+                {
+                    title: 'Phase 2 Coverage',
+                    metrics: [
+                        { v: new Set(zones.map(z => z.domain)).size, l: 'Domains' },
+                        { v: zones.length, l: 'Checks' },
+                        { v: zones.filter(z => z.check_scope === 'FULL').length, l: 'Full' },
+                        { v: zones.filter(z => z.check_scope === 'SOA_ONLY').length, l: 'SOA Only' }
+                    ]
+                },
+                {
+                    title: 'Phase 3 Coverage',
+                    metrics: [
+                        { v: records.length, l: 'Queries' },
+                        { v: records.filter(r => r.status === 'NOERROR').length, l: 'OK' },
+                        { v: records.filter(r => r.internally_consistent === 'DIV!').length, l: 'Divergent' },
+                        { v: records.filter(r => (r.findings || []).length > 0).length, l: 'Findings' }
+                    ]
+                }
+            ];
+
+            document.getElementById('phase-strip').innerHTML = phaseCards.map(card => `
+                <div class="phase-card">
+                    <h3>${card.title}</h3>
+                    <div class="phase-grid">
+                        ${card.metrics.map(m => `
+                            <div class="phase-metric">
+                                <div class="v">${m.v}</div>
+                                <div class="l">${m.l}</div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `).join('');
+        },
+
+        renderHero() {
+            const s = dataManager.current.summary;
+            const det = dataManager.current.detailed_results;
+            const infra = Object.values(det.infrastructure || {});
+            const openResolvers = infra.filter(i => i.resolver_exposed === true).length;
+            const desync = det.zones.filter(z => z.zone_is_synced === false).length;
+            const divergences = det.records.filter(r => r.internally_consistent === 'DIV!').length;
+            const criticalCount = openResolvers + desync + divergences;
+            const grade = s.global_grade || 'N/A';
+
+            document.getElementById('hero-section').style.display = 'grid';
+            document.getElementById('action-board').style.display = 'grid';
+            document.getElementById('hero-title').innerText =
+                criticalCount > 0
+                    ? `${criticalCount} signal(s) deserve immediate review`
+                    : 'No critical indicators surfaced in this report';
+            document.getElementById('hero-subtitle').innerText =
+                `Dataset ${dataManager.current.metadata.arguments.domains} processed at ${new Date(s.timestamp).toLocaleString()}. ` +
+                `Use this view to separate connectivity noise from real DNS risk.`;
+
+            const stats = [
+                { value: grade, label: this.help('Global Grade', 'Global Grade', 'Top-level grade derived from the available scores for this report.') },
+                { value: `${openResolvers}`, label: this.help('Open Resolvers', 'Open Resolvers', 'Count of servers classified as PUBLIC, meaning recursive exposure is visible.') },
+                { value: `${desync}`, label: this.help('Zone Desync', 'Zone Desync', 'Count of zone results where synchronization signals do not match across the tested servers.') },
+                { value: `${divergences}`, label: this.help('Divergent Answers', 'Divergent Answers', 'Count of repeated record checks that returned materially different answers.') }
+            ];
+            document.getElementById('hero-stats').innerHTML = stats.map(stat => `
+                <div class="hero-stat">
+                    <div class="value">${stat.value}</div>
+                    <div class="label">${stat.label}</div>
+                </div>
+            `).join('');
+
+            const heroRisks = [
+                {
+                    cls: openResolvers > 0 ? 'critical' : 'good',
+                    label: this.help('Resolver Exposure', 'Resolver Exposure', 'Highlights whether recursive service appears exposed to the public internet.'),
+                    value: openResolvers,
+                    sub: openResolvers > 0 ? 'Public recursion observed. Review ACLs and exposure.' : 'No public recursion flagged.'
+                },
+                {
+                    cls: desync > 0 ? 'attention' : 'good',
+                    label: this.help('Zone Consistency', 'Zone Consistency', 'Summarizes whether the tested servers appear synchronized for the same zone.'),
+                    value: desync,
+                    sub: desync > 0 ? 'Serial or NS mismatch needs investigation.' : 'No desynchronization detected.'
+                },
+                {
+                    cls: divergences > 0 ? 'attention' : 'good',
+                    label: this.help('Record Stability', 'Record Stability', 'Summarizes whether repeated record lookups stayed stable within the same run.'),
+                    value: divergences,
+                    sub: divergences > 0 ? 'Divergent answers may indicate flapping, load-balancing, or cache issues.' : 'Sequential answers stayed stable.'
+                }
+            ];
+            document.getElementById('hero-side').innerHTML = heroRisks.map(item => `
+                <div class="hero-risk ${item.cls}">
+                    <div class="risk-label">${item.label}</div>
+                    <div class="risk-value">${item.value}</div>
+                    <div class="risk-sub">${item.sub}</div>
+                </div>
+            `).join('');
         },
 
         renderGlobal() {
             const s = dataManager.current.summary;
             const meta = dataManager.current.metadata;
+            const totalQueries = Math.max(s.total_queries || 0, 0);
+            const successRate = totalQueries > 0 ? ((s.success_queries / totalQueries) * 100).toFixed(1) + '%' : 'N/A';
             document.getElementById('sub-header').innerText = `Analysis: ${meta.arguments.domains} @ ${new Date(s.timestamp).toLocaleString()}`;
             
             const metrics = [
-                { l: 'Security Score', v: s.security_score + '%', c: this.getClr(s.security_score) },
-                { l: 'Privacy Score', v: s.privacy_score + '%', c: this.getClr(s.privacy_score) },
-                { l: 'Health Grade', v: s.global_grade, c: s.global_grade.includes('A') ? 'var(--success)' : 'var(--danger)' },
-                { l: 'Queries OK', v: ((s.success_queries / s.total_queries)*100).toFixed(1) + '%', sub: `${s.success_queries}/${s.total_queries}` },
-                { l: 'Divergences', v: s.divergences, c: s.divergences > 0 ? 'var(--danger)' : 'var(--success)' },
-                { l: 'Duration', v: s.execution_time_s + 's' }
+                {
+                    l: this.help('Security Score', 'Security Score', 'Reflects security-oriented controls such as DNSSEC data serving, cookies, EDNS, resolver restriction, web exposure, AXFR, and CAA context.'),
+                    v: s.security_score_available ? s.security_score + '%' : 'N/A',
+                    c: s.security_score_available ? this.getClr(s.security_score) : 'var(--warning)'
+                },
+                {
+                    l: this.help('Privacy Score', 'Privacy Score', 'Reflects privacy-oriented controls such as DoT, DoH, heuristic QNAME minimization, and ECS behavior.'),
+                    v: s.privacy_score_available ? s.privacy_score + '%' : 'N/A',
+                    c: s.privacy_score_available ? this.getClr(s.privacy_score) : 'var(--warning)'
+                },
+                {
+                    l: this.help('Health Grade', 'Global Grade', 'Summarizes the available scores into a single high-level grade. In some runs it may be security-only.'),
+                    v: s.global_grade,
+                    c: s.global_grade.includes('A') ? 'var(--success)' : (s.global_grade === 'N/A' ? 'var(--warning)' : 'var(--danger)')
+                },
+                {
+                    l: this.help('Queries OK', 'Successful Queries', 'Percentage of record queries that returned a successful answer in the current execution.'),
+                    v: successRate,
+                    sub: `${s.success_queries}/${totalQueries}`
+                },
+                {
+                    l: this.help('Divergences', 'Divergences', 'Number of repeated record checks that returned materially different answers across the same execution.'),
+                    v: s.divergences,
+                    c: s.divergences > 0 ? 'var(--danger)' : 'var(--success)'
+                },
+                {
+                    l: this.help('Duration', 'Execution Duration', 'Total time spent collecting and assembling this report.'),
+                    v: s.execution_time_s + 's'
+                }
             ];
 
             document.getElementById('global-analytics').innerHTML = metrics.map(m => `
@@ -255,18 +566,98 @@
             const det = dataManager.current.detailed_results;
             const infra = Object.values(det.infrastructure);
             
-            const counts = {
-                'Open Resolver': infra.filter(i => i.open_resolver === 'OPEN').length,
-                'Lame Delegation': det.zones.filter(z => !z.aa && z.status === 'NOERROR').length,
-                'Divergence': det.records.filter(r => r.internally_consistent === 'DIV!').length,
-                'Low TTL': det.records.filter(r => r.findings && r.findings.some(f => f.includes('TTL'))).length,
-                'Desync': det.zones.filter(z => !z.zone_is_synced).length
-            };
+            const cards = [
+                {
+                    label: this.help('Open Resolver', 'Open Resolver', 'A server appears as an open resolver when it answers a third-party recursive request from the public internet.'),
+                    desc: 'Recursive exposure visible to the public internet.',
+                    value: infra.filter(i => i.resolver_exposed === true).length
+                },
+                {
+                    label: this.help('Zone Desync', 'Zone Desync', 'Zones where serial, authority, or NS-related synchronization signals differ across servers.'),
+                    desc: 'Zones returning inconsistent serial or authority data.',
+                    value: det.zones.filter(z => !z.zone_is_synced).length
+                },
+                {
+                    label: this.help('Lame Delegation', 'Lame Delegation', 'Authoritative infrastructure that does not return the expected AA flag or behaves inconsistently as authority.'),
+                    desc: 'Authoritative responses without AA where it should exist.',
+                    value: det.zones.filter(z => !z.aa && z.status === 'NOERROR').length
+                },
+                {
+                    label: this.help('Divergence', 'Divergence', 'Repeated queries returned different answers during the same execution.'),
+                    desc: 'Sequential queries returned materially different answers.',
+                    value: det.records.filter(r => r.internally_consistent === 'DIV!').length
+                }
+            ];
 
-            document.getElementById('incident-radar').innerHTML = Object.entries(counts).map(([l, v]) => `
-                <div class="radar-item ${v > 0 ? 'danger' : 'safe'}">
-                    <span class="badge ${v > 0 ? 'badge-danger' : 'badge-success'}">${v}</span> ${l}
-                </div>`).join('');
+            document.getElementById('incident-radar').innerHTML = cards.map(card => {
+                const cls = card.value > 0 ? (card.label === 'Open Resolver' ? 'danger' : 'warning') : 'safe';
+                return `
+                    <div class="incident-card ${cls}">
+                        <div class="count">${card.value}</div>
+                        <div class="name">${card.label}</div>
+                        <div class="desc">${card.desc}</div>
+                    </div>`;
+            }).join('');
+        },
+
+        renderActionSummary() {
+            const det = dataManager.current.detailed_results;
+            const infra = Object.values(det.infrastructure);
+            const actions = [];
+
+            const exposedResolvers = infra.filter(i => i.resolver_exposed === true);
+            if (exposedResolvers.length) {
+                actions.push({
+                    cls: 'critical',
+                    title: `${exposedResolvers.length} publicly exposed resolver(s)`,
+                    body: `Start with ${exposedResolvers.slice(0, 3).map(i => i.server || i.ip).join(', ')}. This may indicate operational risk and recursive abuse exposure.`
+                });
+            }
+
+            const desyncedZones = det.zones.filter(z => z.zone_is_synced === false);
+            if (desyncedZones.length) {
+                actions.push({
+                    cls: 'attention',
+                    title: `${desyncedZones.length} zone result(s) with desync`,
+                    body: `Review serials, NS responses, and check scope. Examples: ${desyncedZones.slice(0, 3).map(z => z.domain).join(', ')}.`
+                });
+            }
+
+            const soaOnly = det.zones.filter(z => z.check_scope === 'SOA_ONLY');
+            if (soaOnly.length) {
+                actions.push({
+                    cls: 'attention',
+                    title: `${soaOnly.length} incomplete zone verification(s)`,
+                    body: `Some zones remained in SOA_ONLY scope. Separate network failure from DNS service failure before concluding risk.`
+                });
+            }
+
+            const findings = det.records.filter(r => (r.findings || []).length > 0);
+            if (findings.length) {
+                actions.push({
+                    cls: 'attention',
+                    title: `${findings.length} query result(s) with semantic findings`,
+                        body: `Prioritize entries with dangling targets, permissive policies, and extreme TTLs. TTL/SPF findings are heuristic and should be confirmed before action.`
+                });
+            }
+
+            if (!actions.length) {
+                actions.push({
+                    cls: 'good',
+                    title: 'No immediate critical issue',
+                    body: 'The current run did not surface high-priority incidents. Use the detailed tables for a deeper audit.'
+                });
+            }
+
+            document.getElementById('action-summary').innerHTML = actions.map(item => `
+                <div class="action-item ${item.cls}">
+                    <div class="marker"></div>
+                    <div>
+                        <strong>${item.title}</strong>
+                        <span>${item.body}</span>
+                    </div>
+                </div>
+            `).join('');
         },
 
         applyFilter(v) { this.filter = v.toLowerCase(); this.renderDetails(); },
@@ -284,20 +675,56 @@
             const filtered = data.filter(d => JSON.stringify(d).toLowerCase().includes(this.filter));
             
             const insights = dataManager.current.analytics.phase1_infrastructure || {};
-            document.getElementById('p1-analytics').innerHTML = Object.entries(insights).map(([k,v]) => `<div style="font-size:10px">${k}: <b>${v}</b></div>`).join('');
+            document.getElementById('p1-analytics').innerHTML = [
+                `<div style="font-size:10px">Servers: <b>${data.length}</b></div>`,
+                `<div style="font-size:10px">Alive: <b>${data.filter(d => !d.is_dead).length}</b></div>`,
+                `<div style="font-size:10px">Dead: <b>${data.filter(d => d.is_dead).length}</b></div>`,
+                ...Object.entries(insights).slice(0, 2).map(([k,v]) => `<div style="font-size:10px">${k}: <b>${v}</b></div>`)
+            ].join('');
 
-            let html = `<table><thead><tr><th>Group</th><th>IP Address</th><th>Ping</th><th>U53</th><th>T53</th><th>DoT</th><th>DoH</th><th>Score</th><th>OpenRes</th></tr></thead><tbody>`;
+            let html = `<table><thead><tr>
+                <th>${this.help('Group', 'Server Group', 'Logical group assigned through groups.csv.')}</th>
+                <th>${this.help('IP Address', 'Server Address', 'Target resolver or authoritative server IP.')}</th>
+                <th>${this.help('Profile', 'Server Profile', 'Indicates whether the server behaves as recursive, authoritative, mixed, or unknown.')}</th>
+                <th>${this.help('Ping', 'Reachability', 'Basic ICMP round-trip time used as a coarse network health signal.')}</th>
+                <th>${this.help('U53', 'UDP DNS Service', 'Shows whether UDP/53 responded like a DNS service. This is a responsiveness check, not a full functional certification.')}</th>
+                <th>${this.help('T53', 'TCP DNS Service', 'Shows whether TCP/53 responded like a DNS service. This is a responsiveness check, not a full functional certification.')}</th>
+                <th>${this.help('DoT', 'DNS over TLS', 'Encrypted DNS support over TCP/853.')}</th>
+                <th>${this.help('DoH', 'DNS over HTTPS', 'Encrypted DNS support over HTTPS.')}</th>
+                <th>${this.help('Score', 'Infrastructure Score', 'Profile-aware summary of security and, where applicable, privacy posture.')}</th>
+                <th>${this.help('Resolver', 'Resolver Classification', 'PUBLIC means public recursion was observed; RESTRICTED means recursion appears controlled; UNKNOWN means the evidence was inconclusive.')}</th>
+                <th>${this.help('Caps', 'Capability Markers', 'Shows detected protocol and privacy/security capabilities such as DNSSEC data serving, EDNS, cookies, heuristic QNAME minimization, and ECS behavior.')}</th>
+                <th>${this.help('Web Risk', 'Web Exposure', 'Open web ports detected on the same host. Useful as context, not necessarily a DNS flaw by itself.')}</th>
+            </tr></thead><tbody>`;
             filtered.forEach(d => {
-                html += `<tr class="${d.open_resolver==='OPEN'?'anomaly-row':''}">
+                const caps = [
+                    d.dnssec === 'OK' ? 'DNSSEC' : null,
+                    d.edns0 === 'OK' ? 'EDNS0' : null,
+                    d.cookies === true ? 'Cookies' : null,
+                    d.qname_min === true ? 'QNAME' : null,
+                    d.ecs === false ? 'No-ECS' : null
+                ].filter(Boolean).join(', ') || 'None';
+                const webRisk = d.web_risks && d.web_risks.length > 0 ? d.web_risks.join(', ') : 'None';
+                const resolverBadge = d.resolver_exposed === true ? 'badge-danger' : (d.resolver_restricted === true ? 'badge-success' : 'badge-warning');
+                html += `<tr class="${d.resolver_exposed === true ? 'anomaly-row' : ''}">
                     <td>${this.highlight(d.groups)}</td>
                     <td>${this.highlight(d.ip)}</td>
+                    <td>${d.server_profile || '-'}</td>
                     <td>${d.latency.toFixed(0)}ms</td>
                     <td><span class="badge ${d.port53u_serv==='OK'?'badge-success':'badge-danger'}">${d.port53u_serv}</span></td>
                     <td><span class="badge ${d.port53t_serv==='OK'?'badge-success':'badge-danger'}">${d.port53t_serv}</span></td>
                     <td>${d.dot}</td><td>${d.doh}</td>
                     <td style="color:${this.getClr(d.infrastructure_score)}">${d.infrastructure_score}</td>
-                    <td><span class="badge ${d.open_resolver==='SAFE'?'badge-success':'badge-danger'}">${d.open_resolver}</span></td>
+                    <td><span class="badge ${resolverBadge}">${d.classification || d.open_resolver}</span></td>
+                    <td>${caps}</td>
+                    <td>${webRisk}</td>
                 </tr>`;
+                html += `<tr class="detail-row"><td colspan="12">
+                    Version: ${this.highlight(d.version || '-')} |
+                    Open Resolver Raw: ${this.highlight(d.open_resolver || '-')} |
+                    Latency Range: ${this.highlight(`${d.latency_min || 0}ms .. ${d.latency_max || 0}ms`)} |
+                    Confidence: ${d.confidence || '-'}
+                </td></tr>`;
             });
             document.getElementById('p1-content').innerHTML = html + '</tbody></table>';
         },
@@ -307,15 +734,57 @@
             const filtered = data.filter(d => JSON.stringify(d).toLowerCase().includes(this.filter));
             
             const insights = dataManager.current.analytics.phase2_zones || {};
-            document.getElementById('p2-analytics').innerHTML = Object.entries(insights).map(([k,v]) => `<div style="font-size:10px">${k}: <b>${v}</b></div>`).join('');
+            document.getElementById('p2-analytics').innerHTML = [
+                `<div style="font-size:10px">Domains: <b>${new Set(data.map(d => d.domain)).size}</b></div>`,
+                `<div style="font-size:10px">Checks: <b>${data.length}</b></div>`,
+                `<div style="font-size:10px">Full: <b>${data.filter(d => d.check_scope === 'FULL').length}</b></div>`,
+                `<div style="font-size:10px">SOA Only: <b>${data.filter(d => d.check_scope === 'SOA_ONLY').length}</b></div>`,
+                ...Object.entries(insights).slice(0, 1).map(([k,v]) => `<div style="font-size:10px">${k}: <b>${v}</b></div>`)
+            ].join('');
 
-            let html = `<table><thead><tr><th>Domain</th><th>Server</th><th>Serial</th><th>Lat</th><th>Score</th><th>AA</th><th>AXFR</th></tr></thead><tbody>`;
+            let html = `<table><thead><tr>
+                <th>${this.help('Domain', 'Zone Name', 'Zone or domain being checked in Phase 2.')}</th>
+                <th>${this.help('Group', 'Server Group', 'Logical server group associated with this zone check.')}</th>
+                <th>${this.help('Server', 'Server', 'Specific DNS server that answered the zone query.')}</th>
+                <th>${this.help('Status', 'SOA Status', 'Primary SOA query outcome. Non-NOERROR results often limit deeper checks.')}</th>
+                <th>${this.help('Serial', 'SOA Serial', 'Zone version identifier used to compare synchronization across servers.')}</th>
+                <th>${this.help('Lat', 'Latency', 'SOA query latency for this server and domain pair.')}</th>
+                <th>${this.help('Score', 'Zone Score', 'Summarizes synchronization, authority, transfer exposure, DNSSEC signing, and CAA context.')}</th>
+                <th>${this.help('AA', 'Authoritative Answer', 'Indicates whether the authoritative-answer flag was present when expected.')}</th>
+                <th>${this.help('AXFR', 'Zone Transfer', 'Shows whether a zone transfer was refused, exposed, skipped, or unavailable.')}</th>
+                <th>${this.help('Scope', 'Check Scope', 'FULL means the full zone audit ran. SOA_ONLY means follow-up checks were intentionally shortened.')}</th>
+                <th>${this.help('DNSSEC', 'Zone Signing', 'Whether the zone appeared signed from this server perspective.')}</th>
+                <th>${this.help('CAA', 'CAA Records', 'Number of CAA records detected for the zone.')}</th>
+                <th>${this.help('NS Sync', 'NS Consistency', 'Whether NS answers matched across the servers tested for the same zone.')}</th>
+                <th>${this.help('Web Risk', 'Web Exposure', 'Web ports observed on the same host, shown as supporting context.')}</th>
+            </tr></thead><tbody>`;
             filtered.forEach(d => {
                 html += `<tr class="${!d.zone_is_synced ? 'anomaly-row' : ''}">
-                    <td>${this.highlight(d.domain)}</td><td>${this.highlight(d.server)}</td><td>${d.serial}</td><td>${d.latency}ms</td>
+                    <td>${this.highlight(d.domain)}</td><td>${this.highlight(d.group || '-')}</td><td>${this.highlight(d.server)}</td><td>${d.status}</td><td>${d.serial}</td><td>${d.latency}ms</td>
                     <td style="color:${this.getClr(d.zone_score)}">${d.zone_score}</td>
-                    <td>${d.aa?'OK':'--'}</td><td>${d.axfr_detail}</td>
+                    <td>${d.aa?'OK':'--'}</td><td>${d.axfr_detail}</td><td>${d.check_scope || '-'}</td>
+                    <td>${d.dnssec === true ? 'SIGNED' : (d.dnssec === false ? 'UNSIGNED' : 'N/E')}</td>
+                    <td>${d.caa_records ? d.caa_records.length : 0}</td>
+                    <td>${d.ns_consistent === false ? 'NO' : 'YES'}</td>
+                    <td>${d.web_risks && d.web_risks.length ? d.web_risks.join(', ') : 'None'}</td>
                 </tr>`;
+                if (d.caa_records && d.caa_records.length > 0) {
+                    html += `<tr class="detail-row"><td colspan="14">
+                        MNAME: ${this.highlight(d.mname || '-')} |
+                        RNAME: ${this.highlight(d.rname || '-')} |
+                        Zone Audit MNAME Reachability: ${this.highlight((d.zone_audit && d.zone_audit.mname_reachable) || '-')} |
+                        Timer Issues: ${this.highlight((d.zone_audit && d.zone_audit.timers_issues && d.zone_audit.timers_issues.length) ? d.zone_audit.timers_issues.join(' | ') : 'None')} |
+                        CAA Records: ${this.highlight(d.caa_records.join(' | '))}
+                    </td></tr>`;
+                }
+                else {
+                    html += `<tr class="detail-row"><td colspan="14">
+                        MNAME: ${this.highlight(d.mname || '-')} |
+                        RNAME: ${this.highlight(d.rname || '-')} |
+                        Zone Audit MNAME Reachability: ${this.highlight((d.zone_audit && d.zone_audit.mname_reachable) || '-')} |
+                        Timer Issues: ${this.highlight((d.zone_audit && d.zone_audit.timers_issues && d.zone_audit.timers_issues.length) ? d.zone_audit.timers_issues.join(' | ') : 'None')}
+                    </td></tr>`;
+                }
             });
             document.getElementById('p2-content').innerHTML = html + '</tbody></table>';
         },
@@ -325,17 +794,42 @@
             const filtered = data.filter(d => JSON.stringify(d).toLowerCase().includes(this.filter));
             
             const insights = dataManager.current.analytics.phase3_records || {};
-            document.getElementById('p3-analytics').innerHTML = Object.entries(insights).map(([k,v]) => `<div style="font-size:10px">${k}: <b>${v}</b></div>`).join('');
+            document.getElementById('p3-analytics').innerHTML = [
+                `<div style="font-size:10px">Queries: <b>${data.length}</b></div>`,
+                `<div style="font-size:10px">OK: <b>${data.filter(d => d.status === 'NOERROR').length}</b></div>`,
+                `<div style="font-size:10px">DIV: <b>${data.filter(d => d.internally_consistent === 'DIV!').length}</b></div>`,
+                `<div style="font-size:10px">Findings: <b>${data.filter(d => (d.findings || []).length > 0).length}</b></div>`,
+                ...Object.entries(insights).slice(0, 1).map(([k,v]) => `<div style="font-size:10px">${k}: <b>${v}</b></div>`)
+            ].join('');
 
-            let html = `<table><thead><tr><th>Domain</th><th>Server</th><th>Type</th><th>Status</th><th>Lat</th><th>Sync</th></tr></thead><tbody>`;
+            let html = `<table><thead><tr>
+                <th>${this.help('Domain', 'Query Target', 'Record owner name or domain queried in Phase 3.')}</th>
+                <th>${this.help('Group', 'Server Group', 'Logical server group used for this record query.')}</th>
+                <th>${this.help('Server', 'Server', 'Specific DNS server that answered the query.')}</th>
+                <th>${this.help('Type', 'Record Type', 'Record type requested, such as A, AAAA, MX, TXT, or SOA.')}</th>
+                <th>${this.help('Status', 'DNS Status', 'Primary response code returned by the query.')}</th>
+                <th>${this.help('Lat', 'Latency', 'Response time for the representative query shown in this row.')}</th>
+                <th>${this.help('Sync', 'Consistency Marker', 'OK means repeated checks matched. DIV! means the repeated checks diverged.')}</th>
+                <th>${this.help('Ping', 'Server Reachability', 'Phase 1 ping status reused as context for this answer.')}</th>
+                <th>${this.help('Recursion', 'Recursion Status', 'Phase 1 recursion behavior reused to interpret the record answer context.')}</th>
+                <th>${this.help('DoT', 'DNS over TLS', 'Phase 1 encrypted DNS capability marker.')}</th>
+                <th>${this.help('DoH', 'DNS over HTTPS', 'Phase 1 encrypted DNS capability marker.')}</th>
+                <th>${this.help('NSID', 'Name Server Identifier', 'Optional EDNS NSID value returned by the server when available.')}</th>
+                <th>${this.help('Wildcard', 'Wildcard Detection', 'Indicates whether random subdomains also resolved for this zone/server pair, suggesting zone-level wildcard behavior.')}</th>
+            </tr></thead><tbody>`;
             filtered.forEach(d => {
                 html += `<tr class="${d.internally_consistent==='DIV!'?'anomaly-row':''}">
-                    <td>${this.highlight(d.domain)}</td><td>${this.highlight(d.server)}</td><td>${d.type}</td>
+                    <td>${this.highlight(d.domain)}</td><td>${this.highlight(d.group || '-')}</td><td>${this.highlight(d.server)}</td><td>${d.type}</td>
                     <td><span class="badge ${d.status==='NOERROR'?'badge-success':'badge-danger'}">${d.status}</span></td>
                     <td>${d.latency.toFixed(1)}ms</td><td>${d.internally_consistent}</td>
+                    <td>${d.ping || '-'}</td><td>${d.recursion || '-'}</td><td>${d.dot || '-'}</td><td>${d.doh || '-'}</td><td>${d.nsid || '-'}</td><td>${d.wildcard_detected ? 'YES' : 'NO'}</td>
                 </tr>`;
+                html += `<tr class="detail-row"><td colspan="13">
+                    Answers: ${this.highlight(d.answers || '-')} |
+                    Wildcard Answers: ${this.highlight((d.wildcard_answers && d.wildcard_answers.length) ? d.wildcard_answers.join(' | ') : '-')}
+                </td></tr>`;
                 if (d.findings && d.findings.length > 0) {
-                    html += `<tr><td colspan="6" style="padding:5px 40px; font-size:11px; color:var(--text-secondary)">
+                    html += `<tr class="detail-row"><td colspan="13">
                         ${d.findings.map(f => `↳ <span style="color:var(--warning)">!</span> ${this.highlight(f)}`).join('<br>')}
                     </td></tr>`;
                 }
@@ -345,19 +839,83 @@
     };
 
     const trendAnalyzer = {
+        renderEmpty(id, message) {
+            document.getElementById(id).innerHTML = `<div class="chart-empty">${message}</div>`;
+        },
+
+        renderSingleValue(id, label, value, subtitle, color = '#fff') {
+            document.getElementById(id).innerHTML = `
+                <div class="chart-fallback">
+                    <div class="label">${label}</div>
+                    <div class="big" style="color:${color}">${value}</div>
+                    <div class="sub">${subtitle}</div>
+                </div>`;
+        },
+
+        toNumber(value, fallback = 0) {
+            if (typeof value === 'number' && Number.isFinite(value)) return value;
+            const parsed = Number(value);
+            return Number.isFinite(parsed) ? parsed : fallback;
+        },
+
         render() {
-            if (dataManager.reports.length < 2) return;
+            if (dataManager.reports.length < 2) {
+                const summary = dataManager.current ? dataManager.current.summary : null;
+                if (!summary) {
+                    this.renderEmpty('sec-priv-chart', 'No report loaded.');
+                    this.renderEmpty('success-chart', 'No report loaded.');
+                    this.renderEmpty('div-chart', 'No report loaded.');
+                    return;
+                }
+
+                const sec = summary.security_score_available ? `${summary.security_score}% / ${summary.privacy_score_available ? `${summary.privacy_score}%` : 'N/A'}` : 'N/A';
+                const secColor = summary.security_score_available ? 'var(--success)' : 'var(--warning)';
+                const totalQueries = Math.max(summary.total_queries || 0, 0);
+                const successRate = totalQueries > 0 ? `${((summary.success_queries / totalQueries) * 100).toFixed(1)}%` : 'N/A';
+                const divDensity = totalQueries > 0 ? `${summary.divergences}/${totalQueries}` : `${summary.divergences}`;
+
+                this.renderSingleValue(
+                    'sec-priv-chart',
+                    'Current Snapshot',
+                    sec,
+                    'Current report security and privacy snapshot. Import more reports to unlock the trend view.',
+                    secColor
+                );
+                this.renderSingleValue(
+                    'success-chart',
+                    'Current Success Rate',
+                    successRate,
+                    `${summary.success_queries} successful queries out of ${totalQueries} total.`,
+                    'var(--info)'
+                );
+                this.renderSingleValue(
+                    'div-chart',
+                    'Current Divergence',
+                    divDensity,
+                    'Current-run divergence load. The historical chart appears when 2+ reports are available.',
+                    summary.divergences > 0 ? 'var(--danger)' : 'var(--success)'
+                );
+                return;
+            }
             const rs = [...dataManager.reports].reverse();
             this.plot('sec-priv-chart', [{l:'Sec', k:'security_score', c:'var(--success)'}, {l:'Priv', k:'privacy_score', c:'var(--accent)'}], rs);
-            this.plot('success-chart', [{l:'OK', k:'success_queries', c:'var(--info)', tf: (v,r) => (v/r.summary.total_queries)*100}], rs);
+            this.plot('success-chart', [{l:'OK', k:'success_queries', c:'var(--info)', tf: (v,r) => r.summary.total_queries > 0 ? (v/r.summary.total_queries)*100 : 0}], rs);
             this.plot('div-chart', [{l:'DIV', k:'divergences', c:'var(--danger)'}], rs);
         },
 
         plot(id, lines, rs) {
+            if (!rs.length) {
+                this.renderEmpty(id, 'Not enough historical data.');
+                return;
+            }
             const w = 400, h = 100, p = 20, step = (w-p*2)/(rs.length-1);
             let svg = `<svg viewBox="0 0 ${w} ${h}" class="chart-svg">`;
+            let hasRenderableData = false;
             lines.forEach(l => {
-                const vals = rs.map(r => l.tf ? l.tf(r.summary[l.k], r) : r.summary[l.k]);
+                const vals = rs.map(r => this.toNumber(l.tf ? l.tf(r.summary[l.k], r) : r.summary[l.k], 0));
+                if (vals.some(v => Number.isFinite(v))) {
+                    hasRenderableData = true;
+                }
                 const max = Math.max(...vals, 100);
                 const pts = vals.map((v, i) => `${p + i*step},${h - p - (v/max)*(h-p*2)}`);
                 svg += `<path class="line-path" d="M ${pts.join(' L ')}" style="stroke:${l.c}" />`;
@@ -366,6 +924,10 @@
                     svg += `<circle class="data-point" cx="${x}" cy="${y}" style="stroke:${l.c}" onclick="dataManager.switchTo('${rs[i]._file}')"><title>${l.l}: ${vals[i].toFixed(1)}</title></circle>`;
                 });
             });
+            if (!hasRenderableData) {
+                this.renderEmpty(id, 'The values for this chart are not available in the current reports.');
+                return;
+            }
             document.getElementById(id).innerHTML = svg + '</svg>';
         }
     };

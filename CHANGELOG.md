@@ -2,6 +2,44 @@
 
 All notable changes to this project will be documented in this file.
 
+## [6.9.2] - 2026-03-16
+### Added
+- **Plain Text Report Export**: Added generation of a `.txt` report alongside the existing outputs for copy/paste, ticketing, and offline sharing.
+- **Terminal Executive Takeaways**: Added a final action-oriented summary block to highlight public recursion, zone desynchronization, semantic findings, wildcard behavior, and score applicability.
+- **Phase Snapshots in Terminal**: Added compact pre-table summaries for Infrastructure, Zones, and Records to improve live execution readability.
+- **Progress Activity Context**: Added inline progress context so long-running phases can expose active targets without switching away from single-line progress behavior.
+- **Report Coverage Audit Helper**: Added `tools/report_coverage_check.py` to verify key fields in generated JSON reports.
+
+### Changed
+- **Version Milestone**: Incremented version to 6.9.2.
+- **Measurement Semantics Hardening**:
+  - Reworked open-recursion detection to use a recursive third-party request instead of a non-recursive probe.
+  - Distinguished `DNSSEC data serving` from `DNSSEC validation` in code, UI, and dashboard help.
+  - Limited QNAME minimization scoring to recursive-capable profiles and marked it as heuristic.
+  - Propagated RD intent into downstream checks such as chain resolution, wildcard detection, and CAA validation.
+- **Consistency and Sync Logic**:
+  - Tightened record consistency comparison so relaxed mode no longer hides real IP-set changes.
+  - Replaced Phase 2 sync health with a domain-level synchronization metric based on actual zone sync state.
+  - Moved wildcard persistence to zone/server semantics instead of attaching it to only the first record row.
+- **Terminal UX Refresh**:
+  - Added export-safe behavior when stdout is redirected.
+  - Reworked summaries to separate phase snapshots, detailed rows, interpretations, and final summary blocks.
+  - Simplified progress rendering to keep interactive bars on a single line while preserving plain-text progress when redirected.
+- **Dashboard and Help Alignment**:
+  - Updated HTML explanations so heuristic signals and direct observations are clearly distinguished.
+  - Expanded presentation of zone audit, wildcard, and richer infrastructure context.
+- **README Refresh**:
+  - Updated CLI usage examples and removed unsupported flags from documentation.
+  - Reworked the logic-flow diagram to better match the current pipeline and outputs.
+  - Cleaned up encoding issues and aligned version references with the current release.
+
+### Fixed
+- **CAA Reporting Contract**: Standardized on `caa_records` across collection, scoring, and reporting.
+- **Config/Runtime Drift**: Reconnected settings such as `ONLY_TEST_ACTIVE_GROUPS`, `PING_TIMEOUT`, and `ENABLE_WEB_RISK_CHECK` to active runtime behavior.
+- **Zone and Record Output Gaps**: Persisted wildcard results and additional zone audit details into reporting outputs.
+- **Dashboard Stability**: Guarded charts and summary cards against empty history and division-by-zero scenarios.
+- **Terminal Progress Rendering**: Fixed progress bar artifacts caused by stale inline status text and ensured phase completion clears lingering activity suffixes.
+
 ## [6.9.1] - 2026-03-15
 ### Changed
 - **Terminal UI Consolidation**: Eliminated redundant phase headers and legends in terminal output for a cleaner diagnostic flow.

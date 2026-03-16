@@ -1,16 +1,52 @@
 """
 UI and Terminal Formatting for FriendlyDNSReporter.
 """
+import re
+import sys
+import shutil
+
+COLOR_ENABLED = sys.stdout.isatty()
+
+def _ansi(code):
+    return code if COLOR_ENABLED else ""
 
 # ANSI Palette
-RESET = "\033[0m"
-OK     = "\033[92m"  # Green
-FAIL   = "\033[91m"  # Red
-WARN   = "\033[93m"  # Yellow
-INFO   = "\033[96m"  # Cyan
-CRIT   = "\033[95m"  # Magenta
-BOLD   = "\033[1m"
-UNDER  = "\033[4m"
+RESET = _ansi("\033[0m")
+OK     = _ansi("\033[92m")  # Green
+FAIL   = _ansi("\033[91m")  # Red
+WARN   = _ansi("\033[93m")  # Yellow
+INFO   = _ansi("\033[96m")  # Cyan
+CRIT   = _ansi("\033[95m")  # Magenta
+BOLD   = _ansi("\033[1m")
+UNDER  = _ansi("\033[4m")
+
+_PROGRESS_LAST = {}
+_PROGRESS_LINE_LEN = {}
+
+def strip_ansi(text):
+    return re.sub(r"\x1b\[[0-9;]*m", "", str(text))
+
+def _status_tag(level):
+    mapping = {
+        "OK": f"{OK}[OK]{RESET}",
+        "WARN": f"{WARN}[WARN]{RESET}",
+        "CRIT": f"{FAIL}[CRIT]{RESET}",
+        "INFO": f"{INFO}[INFO]{RESET}",
+        "SKIP": f"{WARN}[SKIP]{RESET}",
+    }
+    return mapping.get(level, f"{INFO}[INFO]{RESET}")
+
+def _format_metrics(items, width=3):
+    chunks = []
+    row = []
+    for key, value in items:
+        row.append(f"{key}: {value}")
+        if len(row) == width:
+            chunks.append(" | ".join(row))
+            row = []
+    if row:
+        chunks.append(" | ".join(row))
+    return chunks
 
 def get_score_color(score):
     if score >= 90: return OK
@@ -26,14 +62,14 @@ def format_grade(score):
     if score >= 60: return f"{WARN}D{RESET}"
     return f"{FAIL}F{RESET}"
 
-def print_banner(version="6.9.1"):
+def print_banner(version="6.9.2"):
     print("\n" + "=" * 80)
     print(f"{BOLD}FRIENDLY DNS REPORTER {version}{RESET}")
     print("=" * 80)
 
 def print_disclaimer():
     """Print the sarcastic legal disclaimer."""
-    print(f"{CRIT}{BOLD}⚠️ LEGAL DISCLAIMER (OR 'DON'T SUE ME'){RESET}")
+    print(f"{CRIT}{BOLD}[!] LEGAL DISCLAIMER (OR 'DON'T SUE ME'){RESET}")
     print("This script is like a horoscope for your DNS: based on facts, interpreted by")
     print("algorithms, and subject to the mood of the network gods. By running it, you accept that:")
     
@@ -59,11 +95,23 @@ def print_disclaimer():
 
 
 def print_header(threads, consistency, target):
-    print(f"Threads: {threads} | Consistency: {consistency}x | Dataset: {target}")
+    output_mode = "rich console" if COLOR_ENABLED else "plain/export-safe"
+    print(f"Threads: {threads} | Consistency: {consistency}x | Dataset: {target} | Output: {output_mode}")
     print("-" * 80)
 
-def print_phase(name):
+def print_phase(name, objective=None):
     print(f"\n{BOLD}{INFO}>>> PHASE {name}{RESET}")
+    if objective:
+        print(f"  {_status_tag('INFO')} {objective}")
+
+def print_phase_snapshot(title, items, interpretation=None):
+    print(f"\n  {BOLD}{title}{RESET}")
+    print(f"  {'-' * len(title)}")
+    for line in _format_metrics(items):
+        print(f"  {line}")
+    if interpretation:
+        print(f"  Interpretation: {interpretation}")
+    print("")
 
 def print_phase_header(name):
     if "1" in name:
@@ -76,15 +124,18 @@ def print_phase_header(name):
         print(f"  {'Domain':30} | {'Group':11} | {'Server':15} | {'Type':5} | {'Status':12} | {'Lat':7} | Sync")
         print("-" * 115)
 
-def print_summary_table(total, success, fail, div, sync_issues, reports, duration: float = 0.0, sec_score=0, priv_score=0, show_legend=True):
+def print_summary_table(total, success, fail, div, sync_issues, reports, duration: float = 0.0, sec_score=0, priv_score=0, show_legend=True, scores_available=True, security_available=True, privacy_available=True, takeaways=None):
     print("\n" + "=" * 80)
     print(f"{BOLD}FINAL DIAGNOSTIC SUMMARY{RESET}")
     print("=" * 80)
-    print(f"  Total Record Queries : {total}")
-    print(f"  Successful (OK)      : {OK}{success}{RESET}")
-    print(f"  Failures (ERR)       : {(FAIL if fail > 0 else OK)}{fail}{RESET}")
-    print(f"  Divergences (DIV)    : {(WARN if div > 0 else OK)}{div}{RESET}")
-    print(f"  Sync/Zone Issues     : {(FAIL if sync_issues > 0 else OK)}{sync_issues}{RESET}")
+    for line in _format_metrics([
+        ("Total Record Queries", total),
+        ("Successful", f"{OK}{success}{RESET}"),
+        ("Failures", f"{(FAIL if fail > 0 else OK)}{fail}{RESET}"),
+        ("Divergences", f"{(WARN if div > 0 else OK)}{div}{RESET}"),
+        ("Zone Issues", f"{(FAIL if sync_issues > 0 else OK)}{sync_issues}{RESET}")
+    ], width=2):
+        print(f"  {line}")
     
     # Advanced Scores
     def _score_clr(s):
@@ -92,13 +143,32 @@ def print_summary_table(total, success, fail, div, sync_issues, reports, duratio
         if s >= 70: return WARN
         return FAIL
 
-    print(f"  {BOLD}SECURITY SCORE      : {_score_clr(sec_score)}{sec_score}/100{RESET}")
-    print(f"  {BOLD}PRIVACY SCORE       : {_score_clr(priv_score)}{priv_score}/100{RESET}")
-    
-    avg_score = (sec_score + priv_score) / 2
-    print(f"  {BOLD}GLOBAL HEALTH GRADE : {format_grade(avg_score)} ({avg_score:.1f}%){RESET}")
+    if security_available:
+        print(f"  {BOLD}SECURITY SCORE      : {_score_clr(sec_score)}{sec_score}/100{RESET}")
+    else:
+        print(f"  {BOLD}SECURITY SCORE      : {WARN}N/A{RESET}")
+
+    if privacy_available:
+        print(f"  {BOLD}PRIVACY SCORE       : {_score_clr(priv_score)}{priv_score}/100{RESET}")
+    else:
+        print(f"  {BOLD}PRIVACY SCORE       : {WARN}N/A (no recursive-profile servers){RESET}")
+
+    if scores_available:
+        avg_score = (sec_score + priv_score) / 2
+        print(f"  {BOLD}GLOBAL HEALTH GRADE : {format_grade(avg_score)} ({avg_score:.1f}%){RESET}")
+    else:
+        if security_available:
+            print(f"  {BOLD}GLOBAL HEALTH GRADE : {format_grade(sec_score)} ({sec_score:.1f}% security-only){RESET}")
+        else:
+            print(f"  {BOLD}GLOBAL HEALTH GRADE : {WARN}N/A (requires Phase 1 data){RESET}")
     
     print(f"  {BOLD}TOTAL EXECUTION TIME: {duration:.2f}s{RESET}")
+
+    if takeaways:
+        print("-" * 80)
+        print(f"  {BOLD}EXECUTIVE TAKEAWAYS{RESET}")
+        for item in takeaways:
+            print(f"  - {item}")
     
     if show_legend:
         print("-" * 80)
@@ -174,10 +244,13 @@ def print_infra_detail(srv, data):
     caps = f"{_cap('dnssec', 'S')} {_cap('edns0', 'E')} {_cap('cookies', 'K')} {_cap('qname_min', 'Q')} {_cap('ecs', 'X')}"
 
     openres = data.get('open_resolver', 'SAFE')
-    if openres == "OPEN": openres_clr = FAIL
-    elif openres == "TIMEOUT": openres_clr = WARN
-    else: openres_clr = OK
-    openres_str = f"{openres} ({data.get('open_resolver_lat', 0):.0f}ms)" if openres in ["OPEN", "REFUSED", "SERVFAIL", "NOERROR"] else openres
+    if openres == "OPEN":
+        openres_clr = FAIL
+    elif openres in ["TIMEOUT", "SERVFAIL", "ERROR"]:
+        openres_clr = WARN
+    else:
+        openres_clr = OK
+    openres_str = f"{openres} ({data.get('open_resolver_lat', 0):.0f}ms)" if openres in ["OPEN", "REFUSED", "SERVFAIL", "NO_RECURSION"] else openres
     
     alive_str = f"{OK}ALIVE{RESET}" if not data['is_dead'] else f"{FAIL}DEAD{RESET}"
     group_str = data.get('groups', '')
@@ -190,6 +263,18 @@ def print_infra_detail(srv, data):
 
     # Layout: Group | Server | Ping | U53 | T53 | DoT | DoH | Sc | Caps | OpenRes | Status
     print(f"  {INFO}{group_str:11}{RESET} | {srv:15} | {ping_clr}{ping_str:16}{RESET} | {p53u_clr}{p53u_str:10}{RESET} | {p53t_clr}{p53t_str:10}{RESET} | {dot_clr}{dot_str:5.5}{RESET} | {doh_clr}{doh_str:5.5}{RESET} | {score_str} | {caps} | {openres_clr}{openres_str:9}{RESET} | {alive_str}")
+
+    profile = data.get("server_profile", "unknown")
+    resolver_class = data.get("classification", "UNKNOWN")
+    resolver_conf = data.get("confidence", "NONE")
+    version = data.get("version", "N/A")
+    web_risks = data.get("web_risks", [])
+    web_risk_str = ",".join(str(p) for p in web_risks) if web_risks else "none"
+    print(
+        f"      Profile={profile} | Resolver={resolver_class}/{resolver_conf} | "
+        f"Version={version} | DNSSEC={data.get('dnssec_mode', 'DATA_SERVING')} | "
+        f"QNAME-Min={data.get('qname_min_confidence', 'NONE')} | WebRisk={web_risk_str}"
+    )
 
 def print_zone_detail(srv, domain, res):
     serial = res.get('serial', '?')
@@ -263,9 +348,20 @@ def print_zone_detail(srv, domain, res):
 
     print(f"  {domain:30} | {INFO}{group_str:11}{RESET} | {srv:15} | {serial_str:18} | {lat_str} | {score_str} | {aa_str} | {axfr_clr}{axfr_str:18}{RESET}")
 
+    dnssec = res.get("dnssec")
+    dnssec_str = "SIGNED" if dnssec is True else ("UNSIGNED" if dnssec is False else "N/E")
+    caa_count = len(res.get("caa_records", []))
+    ns_consistent = "YES" if res.get("ns_consistent", True) else "NO"
+    scope = res.get("check_scope", "FULL")
+    web_risk = ",".join(str(p) for p in res.get("web_risks", [])) or "none"
+    print(
+        f"      Status={status} | Scope={scope} | DNSSEC={dnssec_str} | "
+        f"CAA={caa_count} | NS-Consistent={ns_consistent} | WebRisk={web_risk}"
+    )
+
 def print_zone_audit_block(domain, audit):
     """Print a concise summary of advanced zone diagnostics."""
-    print(f"  {INFO}>> 🔍 [ZONE AUDIT: {domain}]{RESET}")
+    print(f"  {INFO}>> [ZONE AUDIT: {domain}]{RESET}")
     
     # DNSSEC
     sec_str = f"{OK}SIGNED{RESET}" if audit.get("dnssec") else f"{WARN}UNSIGNED{RESET}"
@@ -278,7 +374,8 @@ def print_zone_audit_block(domain, audit):
     m_reach = audit.get("mname_reachable")
     m_str = ""
     if m_reach:
-        m_clr = OK if m_reach == "UP" else (FAIL if m_reach == "DOWN" else WARN)
+        upper_reach = str(m_reach).upper()
+        m_clr = OK if "(UP)" in upper_reach else (FAIL if "(DOWN)" in upper_reach else WARN)
         m_str = f" [MNAME: {m_clr}{m_reach}{RESET}]"
         
     # Web Risk
@@ -296,18 +393,18 @@ def print_warning(msg):
     print(f"  {WARN}{msg}{RESET}")
 
 def print_phase_footer(name, metrics, duration: float = 0.0, insights=None):
-    print(f"  {BOLD}{UNDER}--- Phase {name} - Analytical Insights ---{RESET}")
-    for k, v in metrics.items():
-        print(f"  {k:20}: {v}")
-    
+    print(f"\n  {BOLD}{UNDER}Phase {name} Summary{RESET}")
+    for line in _format_metrics(list(metrics.items()), width=2):
+        print(f"  {line}")
+
     if insights:
-        print(f"  {BOLD}Analytics:{RESET}")
+        print(f"  {BOLD}Interpretation{RESET}")
         for k, v in insights.items():
-            print(f"  ↳ {k:18}: {v}")
-            
+            print(f"  - {k}: {v}")
+
     if duration > 0.0:
-        print(f"  {'Execution Time':20}: {duration:.2f}s")
-    print("-" * 50)
+        print(f"  Execution Time: {duration:.2f}s")
+    print("  " + "-" * 60)
 
 def format_result(target, group, server, rtype, status, latency, is_consistent, warn_ms=150, crit_ms=500):
     if status == "NOERROR" or status == "NXDOMAIN":
@@ -340,15 +437,58 @@ def print_record_findings(findings):
         else:
             clr = INFO
             
-        print(f"       {clr}↳ ! {finding}{RESET}")
+        print(f"       {clr}-> {finding}{RESET}")
 
-def print_progress(current, total, prefix="", length=30):
+def print_record_context(record):
+    """Print a concise second line with query context and answer preview."""
+    answers = str(record.get("answers", ""))
+    if len(answers) > 110:
+        answers = answers[:107] + "..."
+
+    nsid = record.get("nsid") or "-"
+    print(
+        "       "
+        f"Ping={record.get('ping', 'N/A')} | Port53={record.get('port53', 'N/A')} | "
+        f"Rec={record.get('recursion', 'N/A')} | DoT={record.get('dot', 'N/A')} | "
+        f"DoH={record.get('doh', 'N/A')} | NSID={nsid} | Answers={answers}"
+    )
+
+def print_progress(current, total, prefix="", length=30, status_suffix=""):
     """Prints a carriage-return progress bar."""
     percent = (current / total) * 100
+    if current >= total:
+        status_suffix = ""
+    if not COLOR_ENABLED:
+        bucket = int(percent // 10)
+        if current in (1, total) or _PROGRESS_LAST.get(prefix) != bucket:
+            _PROGRESS_LAST[prefix] = bucket
+            suffix = f" | {status_suffix}" if status_suffix else ""
+            print(f"  {_status_tag('INFO')} {prefix}: {percent:3.0f}% ({current}/{total}){suffix}")
+        return
     filled = int(length * current // total)
-    bar = "█" * filled + "-" * (length - filled)
-    print(f"\r  {INFO}{prefix}{RESET} |{bar}| {percent:3.0f}% ({current}/{total})", end="", flush=True)
-    if current == total: print() # New line when done
+    bar = "#" * filled + "-" * (length - filled)
+    suffix = f" | {status_suffix}" if status_suffix else ""
+    line = f"  {INFO}{prefix}{RESET} |{bar}| {percent:3.0f}% ({current}/{total}){suffix}"
+    plain_line = strip_ansi(line)
+    last_len = _PROGRESS_LINE_LEN.get(prefix, 0)
+    width = shutil.get_terminal_size((120, 20)).columns
+    pad = max(last_len - len(plain_line), 0)
+    visible_line = plain_line if len(plain_line) <= width - 1 else plain_line[:width - 1]
+    render_line = line if len(plain_line) <= width - 1 else strip_ansi(line)[:width - 1]
+    print(f"\r{render_line}{' ' * pad}", end="", flush=True)
+    _PROGRESS_LINE_LEN[prefix] = len(visible_line)
+    if current == total:
+        _PROGRESS_LINE_LEN[prefix] = 0
+        print()
+
+def format_progress_status(active_items=None, idle_for=0.0):
+    active_items = active_items or []
+    focus = ", ".join(active_items[:3]) if active_items else "waiting for worker completion"
+    suffix = f"active: {focus}"
+    if len(active_items) > 3:
+        suffix += f" (+{len(active_items) - 3} more)"
+    suffix += f" | idle {idle_for:.0f}s"
+    return suffix
 
 def print_legend_phase1_table():
     """Legend for Phase 1 results table (Infrastructure)."""
@@ -357,9 +497,9 @@ def print_legend_phase1_table():
     print(f"  - {BOLD}U53 / T53{RESET}       : Standard DNS Port 53 Availability (UDP / TCP).")
     print(f"  - {BOLD}DoT / DoH{RESET}       : Encrypted DNS Support (DNS-over-TLS Port 853 / DNS-over-HTTPS Port 443).")
     print(f"  - {BOLD}PROBE STATUSES{RESET}   : {OK}OK(ms){RESET} = Service Up | {WARN}P_ONLY{RESET} = Port Open but Service Failed | {FAIL}CLOSE{RESET} = Port Closed.")
-    print(f"  - {BOLD}Sc{RESET}               : Individual Infra Score (0-100) based on Weights (Ping 20%, Probes 40%, Security 40%).")
-    print(f"  - {BOLD}Caps (S E K Q X){RESET}: {OK}S{RESET}EC (DNSSEC), {OK}E{RESET}DNS, {OK}K{RESET}ookies, {OK}Q{RESET}name-Min, {OK}X{RESET}=ClientSubnet.")
-    print(f"  - {BOLD}OpenRes{RESET}          : Recursion safety ({OK}SAFE{RESET}, {FAIL}OPEN{RESET}=Vulnerable to DDoS Amplification).")
+    print(f"  - {BOLD}Sc{RESET}               : Individual infra score derived from observed security/privacy signals and server role.")
+    print(f"  - {BOLD}Caps (S E K Q X){RESET}: {OK}S{RESET}=DNSSEC data serving, {OK}E{RESET}=EDNS, {OK}K{RESET}=Cookies, {OK}Q{RESET}=QNAME-Min heuristic, {OK}X{RESET}=ECS seen.")
+    print(f"  - {BOLD}OpenRes{RESET}          : Public recursion exposure test ({FAIL}OPEN{RESET}=public recursion seen, {OK}NO_RECURSION/REFUSED{RESET}=restricted).")
     print("-" * 145)
 
 def print_legend_phase1_analytics():
@@ -383,7 +523,7 @@ def print_legend_phase2_analytics():
     """Legend for Phase 2 analytical summary."""
     print(f"  {BOLD}PHASE 2: ANALYTICS CRITERIA{RESET}")
     print(f"  - {BOLD}Zone Compliance{RESET}: Overall adherence score to zone security and synchronization standards.")
-    print(f"  - {BOLD}Sync Health{RESET}    : Global consistency rate. 100% = All server serials match for all zones.")
+    print(f"  - {BOLD}Sync Health{RESET}    : Percentage of tested domains whose authoritative servers shared the same SOA serial.")
     print(f"  - {BOLD}CAA Adoption{RESET}   : Certificate Authority Authorization usage to prevent SSL hijacking.")
     print("-" * 50)
 
@@ -392,7 +532,7 @@ def print_legend_phase3_table():
     print(f"\n  {BOLD}PHASE 3: TECHNICAL COLUMN LEGEND{RESET}")
     print(f"  - {BOLD}Status{RESET}      : {OK}NOERROR{RESET} (Success), {WARN}NXDOMAIN{RESET} (No exist), {FAIL}SERVFAIL/REFUSED/TIMEOUT{RESET}.")
     print(f"  - {BOLD}Sync{RESET}        : Stability marker. {OK}OK{RESET} = Consistent results | {WARN}DIV!{RESET} = Flapping/Divergent records.")
-    print(f"  - {BOLD}↳ ! [Issue]{RESET} : Forensic findings like Dangling DNS, TTL logic errors, SPF/DMARC syntax.")
+    print(f"  - {BOLD}-> ! [Issue]{RESET} : Forensic findings like Dangling DNS plus heuristic TTL/SPF/DMARC checks.")
     print("-" * 115)
 
 def print_legend_phase3_analytics():
@@ -406,13 +546,13 @@ def print_legend_summary():
     """Legend for Final Audit Summary."""
     print(f"  {BOLD}SUMMARY LEGEND & SCORING CRITERIA:{RESET}")
     print(f"  {INFO}SECURITY SCORE (0-100):{RESET}")
-    print(f"  - {BOLD}DNSSEC/CAA{RESET}   : Validates trust chain (DS/RRSIG) and SSL issuance policies.")
+    print(f"  - {BOLD}DNSSEC/CAA{RESET}   : Checks DNSSEC data serving and SSL issuance policies; this is not full resolver validation testing.")
     print(f"  - {BOLD}DNS Cookies{RESET}  : RFC 7873 resistance against IP spoofing and amplification.")
     print(f"  - {BOLD}AXFR Block{RESET}   : Evaluation of zone transfer security (RFC 5936).")
-    print(f"  - {BOLD}OpenResolver{RESET} : Detection of recursive infrastructure exposed to the public internet.")
+    print(f"  - {BOLD}OpenResolver{RESET} : Detection of public recursion exposure using third-party recursion requests.")
     print(f"  {INFO}PRIVACY SCORE (0-100):{RESET}")
     print(f"  - {BOLD}DoT/DoH{RESET}      : DNS encryption (TLS/HTTPS) to prevent ISP/MITM snooping.")
-    print(f"  - {BOLD}QNAME-Min{RESET}    : RFC 7816 reduction in query data leakage to upstream servers.")
+    print(f"  - {BOLD}QNAME-Min{RESET}    : Heuristic RFC 7816 signal for recursive resolvers only.")
     print(f"  - {BOLD}ECS Masking{RESET}  : RFC 7871 client privacy protection (Subnet masking).")
     print(f"  {INFO}GRADING SYSTEM:{RESET}")
     print(f"  - {OK}A+ / A (90+){RESET}   : Professional compliance | {WARN}C / D (60-80){RESET} : Warnings | {FAIL}F (<60){RESET} : Critical Risks.")

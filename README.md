@@ -1,194 +1,202 @@
-# FriendlyDNSReporter
+﻿# FriendlyDNSReporter
 > *Because it is always DNS. Or not. But mostly yes.*
 
 [![Python](https://img.shields.io/badge/Language-Python-3776AB.svg)](https://www.python.org/)
-[![Status](https://img.shields.io/badge/Status-Stable_(v6.9.1)-green.svg)]()
+[![Status](https://img.shields.io/badge/Status-Stable_(v6.9.2)-green.svg)]()
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)]()
 
-Does your boss ask for "evidence" that the DNS is broken? 
-Do you enjoy typing `dig` 5,000 times a day? 
+Does your boss ask for "evidence" that DNS is broken?
+Do you enjoy typing `dig` 5,000 times a day?
 Do you like staring at raw text output until your eyes bleed?
 
 **No?** Then `FriendlyDNSReporter` is for you.
 
-This tool has been completely rewritten in Python to ensure native compatibility between **Windows** and **Linux**, providing fast, parallel diagnostics and modern visual reports.
+This tool provides parallel DNS diagnostics for **Windows** and **Linux**, with terminal summaries, structured reports, and an HTML dashboard.
 
-## 🚀 Features (Buzzwords)
+## Features
 
-*   **Forensic Analysis Console (v6.9.0)**: Completely redesigned dark-mode dashboard with real-time global search and SVG trend charts.
-*   **Professional JSON Reporting (v6.8.0)**: Hierarchical output with execution metadata and system info for automation.
-*   **Extended Forensic Legends (v6.5.0)**: Exhaustive definitions for PING, technical statuses, and scoring weights.
-*   **Triple Double Legend System (v6.4.0)**: Sequential legends (Technical Table -> Analysis Summary) for every phase.
-*   **Analytical Legends (v6.3.0)**: Contextual explanations for forensic indices.
-*   **Granular Forensic Scoring (v6.2.0)**: Individual Server and Zone health scores (0-100).
-*   **Auditor Intelligence (v6.1.0)**: Advanced analytical insights (Adoption rates, Sync health, Stability Index).
-*   **Privacy & Security Scoring (v6.0.0)**: Forensic markers assessment (ECS, QNAME-M, Cookies, CAA, DNSSEC).
-*   **Forensic Execution Logging**: Detailed recording of every diagnostic event for technical analysis.
-*   **Interactive Terminal Legends (v5.2.0)**: Automatic legends after each phase explaining columns and colors.
-*   **Deep Service Validation (v5.0.0)**: Differentiates between Port status (socket) and Service status (real DNS response) for UDP, TCP, DoT, and DoH.
-*   **Smart Loader (v5.0.0)**: Automatic detection of CSV delimiters (`,` or `;`) and Type-aware queries (Recursive vs. Authoritative).
-*   **Selective Diagnostics**: Run only the phases you need using CLI flags (`-p 1,3`).
-*   **3-Phase Circuit Breaker**: Phase 1 acts as a gatekeeper; if a service is truly down, the script skips subsequent phases to save time.
-*   **Semantic DNS Audit (v4.0.0)**: SPF/DMARC validation, Dangling DNS detection, MX reachability, and Wildcard mapping.
-*   **Performance Tracking (v4.1.0)**: Configurable latency thresholds (WARN/CRIT) across all phases.
-*   **Premium Dashboard**: Modern responsive HTML reports with charts and detailed findings.
+* **Operational Console (v6.9.2)**: Improved terminal snapshots, inline progress, executive takeaways, and export-safe output.
+* **Plain Text Report Export (v6.9.2)**: Generates a `.txt` report for tickets, copy/paste, and offline review.
+* **Forensic Analysis Console (v6.9.0)**: HTML dashboard with search, incident focus, interpretation help, and trend charts.
+* **Professional JSON Reporting (v6.8.0)**: Hierarchical output with execution metadata and system info for automation.
+* **Extended Forensic Legends**: Definitions for status markers, metrics, and scoring.
+* **Granular Forensic Scoring**: Individual infrastructure and zone health scores.
+* **Selective Diagnostics**: Run only the phases you need with `-p`.
+* **3-Phase Circuit Breaker**: Dead or unreachable services can be skipped in later phases.
+* **Semantic DNS Audit**: Dangling DNS, wildcard detection, SPF/DMARC heuristics, TTL review, and MX checks.
 
-## 📊 Logic Flow
+## Logic Flow
 
 ```mermaid
 graph TD
-    Start((Start)) --> LoadConfig[Load settings.ini & Data]
-    LoadConfig --> Logging[Initialize forensic Logging: Optional]
-    Logging --> SmartLoad[Smart CSV Loader: Delimiter & Type Detection]
-    SmartLoad --> PhaseSelect{Phase Selection?}
-    
-    PhaseSelect -- Selective --> Phase1
-    PhaseSelect -- Default All --> Phase1
+    Start((Start)) --> Config["Load settings.ini"]
+    Config --> Data["Load domains.csv and groups.csv"]
+    Data --> Select{"Phase selection (-p) or defaults"}
 
-    subgraph "Phase 1: Deep Infrastructure"
-        Phase1 --> Ping[Ping & Latency SLA]
-        Phase1 --> PortCheck[Port Socket Check]
-        PortCheck --> ServiceCheck[Deep Service Validation: UDP, TCP, DoT, DoH]
-        ServiceCheck --> CircuitBreaker{Service Functional?}
-        CircuitBreaker -- YES --> LegendT1[UI Legend: Technical Columns]
-        LegendT1 --> Insights1[Analytical Summary: Infrastructure Health]
-        Insights1 --> LegendA1[UI Legend: Forensic Indices]
+    Select --> P1
+    Select --> P2
+    Select --> P3
+
+    subgraph "Phase 1 - Infrastructure"
+        P1["Reachability and service probes"] --> P1A["Ping, UDP/TCP 53, DoT, DoH"]
+        P1A --> P1B["Capability and exposure checks"]
+        P1B --> P1C["Profile-aware infrastructure score"]
     end
 
-    LegendA1 --> Phase2
-
-    CircuitBreaker -- NO --> Skip[Skip Phase 2 & 3 for this Server]
-    CircuitBreaker -- YES --> Phase2
-
-    subgraph "Phase 2: Zone Integrity"
-        Phase2 --> Recursion[Type-Aware Recursion & Smart Fallback]
-        Recursion --> Sync[SOA Serial Sync]
-        Sync --> AA[Lame Delegation AA Flag]
-        AA --> LegendT2[UI Legend: Technical Columns]
-        LegendT2 --> Insights2[Analytical Summary: Zone Compliance]
-        Insights2 --> LegendA2[UI Legend: Forensic Indices]
+    subgraph "Phase 2 - Zones"
+        P2["Zone integrity checks"] --> P2A["SOA, serial, AA, AXFR, DNSSEC, CAA"]
+        P2A --> P2B{"SOA available?"}
+        P2B -->|Yes| P2C["Full zone analysis"]
+        P2B -->|No| P2D["SOA_ONLY / shortened scope"]
+        P2C --> P2E["Zone score and synchronization analysis"]
+        P2D --> P2E
     end
 
-    LegendA2 --> Phase3
-
-    subgraph "Phase 3: Semantic Audit"
-        Phase3 --> Parallel[Type-Aware Queries: RD bit based on Group Type]
-        Phase3 --> Semantic[SPF/DMARC Syntax & Security]
-        Phase3 --> Chain[Dangling DNS & MX Target Test]
-        Chain --> LegendT3[UI Legend: Technical Columns]
-        LegendT3 --> Insights3[Analytical Summary: Stability Index]
-        Insights3 --> LegendA3[UI Legend: Forensic Indices]
+    subgraph "Phase 3 - Records"
+        P3["Repeated record queries"] --> P3A["Consistency checks across A / AAAA / MX / TXT / etc."]
+        P3A --> P3B["Semantic audit: dangling DNS, SPF/DMARC, TTL, wildcard"]
+        P3B --> P3C["Record findings and divergence metrics"]
     end
 
-    LegendA3 --> Scoring[Calculate Privacy & Security Scores]
-    Scoring --> Reports[Generate Forensic JSON / HTML / Multi-CSV]
-    Reports --> Dashboard[Forensic Console: Search & Historical Trends]
-    Dashboard --> End((End))
-    Skip --> Reports
+    P1C --> Summary
+    P2E --> Summary
+    P3C --> Summary
+
+    Summary["Aggregate security, privacy, and execution summaries"] --> Outputs
+
+    subgraph "Outputs"
+        Outputs["Generate reports"] --> JSON["JSON report"]
+        Outputs --> HTML["HTML dashboard"]
+        Outputs --> TXT["Plain text report"]
+        Outputs --> CSV["Optional CSV exports"]
+        Outputs --> TERM["Terminal snapshots and executive takeaways"]
+    end
+
+    TERM --> End((End))
+    JSON --> End
+    HTML --> End
+    TXT --> End
+    CSV --> End
 ```
 
-## 📦 Installation
+## Installation
 
-1.  Clone the repository:
-    ```bash
-    git clone https://github.com/flashbsb/FriendlyDNSReporter.git
-    cd FriendlyDNSReporter
-    ```
+1. Clone the repository:
+```bash
+git clone https://github.com/flashbsb/FriendlyDNSReporter.git
+cd FriendlyDNSReporter
+```
 
-2.  Dependencies are now installed **automatically** during the first run. Just execute the script:
-    ```bash
-    python friendly_dns_reporter.py
-    ```
+2. Run the script:
+```bash
+python friendly_dns_reporter.py
+```
 
-## 🎮 Usage
+The script currently attempts to install missing dependencies automatically on first run.
+
+## Usage
 
 ### Basic Execution
-The script uses files in the `config/` directory by default:
+
 ```bash
 python friendly_dns_reporter.py
 ```
 
 ### Advanced Examples
+
 ```bash
 # Run only Phase 1 (Infrastructure) and Phase 3 (Records)
 python friendly_dns_reporter.py -p 1,3
 
-# Using custom datasets and 20 parallel threads
-python friendly_dns_reporter.py -n my_dataset.csv -t 20
+# Use custom datasets
+python friendly_dns_reporter.py -n my_domains.csv -g my_groups.csv
 
-# Running a consistency loop (repeats each test 3 times)
-python friendly_dns_reporter.py -c 3
+# Save reports to a custom output directory
+python friendly_dns_reporter.py -o reports
+
+# Run only the Zone phase
+python friendly_dns_reporter.py -p 2
 ```
 
 ### Command Flags
 
 | Flag | Description |
 |------|-------------|
-| `-p` | **Phases**. Select phases to run (e.g., `1`, `1,3`, `2`). Default: All. |
-| `-n` | **Domains CSV**. Path to domains file (Default: `config/domains.csv`). |
-| `-g` | **Groups CSV**. Path to server groups file (Default: `config/groups.csv`). |
-| `-o` | **Output**. Directory to save reports (Default: `logs`). |
-| `-t` | **Threads**. Parallel execution count (Default: 10 or from `.ini`). |
-| `-c` | **Consistency**. Number of repetitions per test to detect divergence. |
-| `-h` | **Help**. Show available options. |
+| `-p` | Select phases to run (for example `1`, `1,3`, `2`). Default: all enabled phases. |
+| `-n` | Path to the domains CSV. Default: `config/domains.csv`. |
+| `-g` | Path to the groups CSV. Default: `config/groups.csv`. |
+| `-o` | Output directory for generated reports. |
+| `-h` | Show command help. |
 
-## ⚙️ Configuration (`config/settings.ini`)
+Parallelism, consistency count, timeouts, scoring options, and feature toggles are configured in `config/settings.ini`.
 
-The `settings.ini` file centralizes script behavior:
-- `ENABLE_PHASE_*`: Toggle Infrastructure, Zone, or Record phases independently.
-- `MAX_THREADS`: Parallelism limit.
-- `DNS_TIMEOUT` / `DNS_RETRIES`: Native engine execution parameters.
-- `LOG_DIR`: Directory where reports are saved.
-- `STRICT_*_CHECK`: Define tolerance for record consistency (IP, TTL, Order).
+## Configuration
 
-## 📖 Technical Glossary (Status Meanings)
+The `config/settings.ini` file centralizes runtime behavior:
 
-Understanding the diagnostic outputs:
+- `ENABLE_PHASE_*`: toggle Infrastructure, Zone, or Record phases.
+- `MAX_THREADS`: parallelism limit.
+- `DNS_TIMEOUT` / `DNS_RETRIES`: DNS engine behavior.
+- `STRICT_*_CHECK`: record consistency tolerance for IPs, order, and TTL.
+- `ENABLE_*_REPORT`: control JSON, HTML, CSV, and related outputs.
+
+## Reports
+
+The tool can generate:
+
+- `JSON`: full structured report used by the dashboard.
+- `HTML`: interactive forensic dashboard.
+- `TXT`: plain text summary for copy/paste and attachments.
+- `CSV`: optional phase detail and summary exports.
+
+## Technical Glossary
 
 | Status | Phase | Meaning |
 |--------|-------|---------|
-| `OK` | All | Service is functional and responding correctly. |
-| `P_ONLY` | 1 | **Port Only**. TCP/UDP port is open, but the DNS service is NOT responding to queries. |
-| `DIV!` | 3 | **Divergent**. Stability marker indicating inconsistent results across sequential queries (flapping/rounding records). |
-| `LAME` | 2 | **Lame Delegation**. Server is listed as authoritative but the Authoritative Answer (AA) flag is missing in the response. |
-| `XFR-OK` | 2 | **AXFR Vulnerability**. Zone transfer is allowed, which may leak your entire DNS zone data. |
-| `SAFE` | 1 | **Open Resolver Check**. Server is not vulnerable to being used in DNS Amplification DDoS attacks. |
+| `OK` | All | Service or check completed successfully. |
+| `P_ONLY` | 1 | Port is open, but the DNS service did not behave like a healthy responder. |
+| `DIV!` | 3 | Repeated checks returned materially different answers. |
+| `LAME` | 2 | The server is expected to be authoritative but did not behave authoritatively. |
+| `XFR-OK` | 2 | AXFR was allowed, which may expose the zone. |
+| `REFUSED` / `NO_RECURSION` | 1 | Recursion appears restricted rather than publicly exposed. |
+| `OPEN` | 1 | The server answered a third-party recursive request and may be publicly exposed. |
 
-## 📄 Input Files
+## Input Files
 
-The script now features a **Smart Loader (v5.0.0)** that automatically detects the delimiter (`;` or `,`).
+The loader automatically detects `;`, `,`, and tab-delimited CSV input.
 
 ### `config/groups.csv`
+
 ```csv
 # NAME;DESCRIPTION;TYPE;TIMEOUT;SERVERS
 GOOGLE;Google Public DNS;recursive;2;8.8.8.8,8.8.4.4
 OPENDNS;Cisco OpenDNS;recursive;3;208.67.222.222,208.67.220.220
 ```
-> [!NOTE]
-> The `TYPE` column (recursive/iterative) is used to automatically set the recursion bit in DNS queries.
+
+The `TYPE` column is used to decide whether recursion should be requested for that group.
 
 ### `config/domains.csv`
+
 ```csv
 # DOMAIN;GROUPS;RECORDS;EXTRA
 google.com;GOOGLE,CLOUDFLARE;A,AAAA,TXT;www,mail
 wikipedia.org;QUAD9,OPENDNS;A,SOA;
 ```
 
-## 🤝 Contributing
+## Contributing
 
-Found a bug? Have a cool feature to add?
-Please open a Pull Request. We appreciate any help maintaining this "mostly DNS" diagnostic tool.
+Found a bug or want to improve the diagnostics? Pull requests are welcome.
 
-## 📜 License
+## License
 
-MIT. Use it as you wish, just don't blame us if it breaks your DNS.
+MIT. Use it as you wish, just do not blame the tool if your DNS misbehaves.
 
-## ⚠️ Legal Disclaimer (Don't sue me)
+## Legal Disclaimer
 
 This script is like a horoscope for your DNS: based on facts, interpreted by algorithms, and subject to the mood of the network gods. By running it, you accept that:
 
-1.  **Responsibility? Zero.** If your DNS explodes, your internet vanishes, or your cat learns COBOL because of this script, it's on you. We aren't lawyers; we're just people who run `dig` too much.
-2.  **The Journey is Dark.** The script analyzes what it receives but lacks a crystal ball to know who intercepted your packet mid-flight. Creative ISPs, paranoid firewalls, and solar flares are not included in the report.
-3.  **Scores are just Numbers.** The 0-100 score is a moral guide, not an absolute truth. A score of 100 doesn't make you master of the universe, and a 0 doesn't necessarily mean you should change careers.
-4.  **Technological Hallucinations.** The results are a snapshot in time. If your environment's reality differs from what the script saw, trust your brain and analyze with caution.
-5.  **Use at your own risk.** If you use this as the sole evidence to pick a fight, remember: "Because it is always DNS" is a meme for a reason.
+1. **Responsibility? Zero.** If your DNS explodes, your internet vanishes, or your cat learns COBOL because of this script, it is on you.
+2. **The Journey is Dark.** The script analyzes what it receives but cannot know who interfered with the path.
+3. **Scores are just numbers.** They are guidance, not absolute truth.
+4. **Technological hallucinations happen.** Results are a snapshot in time.
+5. **Use at your own risk.** DNS is still DNS.

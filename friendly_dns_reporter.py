@@ -5,7 +5,7 @@
 =============================================================================
 FRIENDLY DNS REPORTER
 =============================================================================
-Version: 6.9.1
+Version: 6.9.2
 Author: flashbsb
 Description: 3-Phase Automated DNS diagnostics for Windows and Linux.
 =============================================================================
@@ -49,6 +49,7 @@ _verify_and_install_dependencies()
 import argparse
 import csv
 import concurrent.futures
+import ipaddress
 import threading
 import urllib3
 import logging
@@ -64,6 +65,8 @@ import core.ui as ui
 
 # Silence DoH/DoT HTTPS warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+VERSION = "6.9.2"
 
 # Setup Logging
 def setup_logging(settings):
@@ -152,39 +155,140 @@ def load_datasets(domains_path, groups_path):
 
 def compare_consistency(queries, settings):
     """Check consistency between multiple query answers based on settings."""
-    if not queries: return True
+    if not queries:
+        return True
+
+    def _normalize_answer(answer):
+        parts = answer.split()
+        normalized = []
+        for part in parts:
+            token = part.rstrip(".")
+            try:
+                ip_obj = ipaddress.ip_address(token)
+                normalized.append(str(ip_obj) if not settings.strict_ip_check else token)
+                continue
+            except ValueError:
+                pass
+            normalized.append(part)
+        return " ".join(normalized)
     
     def _get_key(q):
         # Build comparison tuple based on strictness
-        ans = q['answers']
+        ans = [_normalize_answer(a) for a in q.get('answers', [])]
         if not settings.strict_order_check:
             ans = sorted(ans)
         
-        if not settings.strict_ttl_check:
-            # Simple heuristic: remove the first part if it looks like a TTL (digit)
-            ans = [" ".join(a.split(" ")[1:]) if a.split(" ")[0].isdigit() else a for a in ans]
-            
-        return tuple(ans)
+        ttl = q.get("ttl", 0) if settings.strict_ttl_check else None
+        return tuple(ans), ttl
 
     base_key = _get_key(queries[0])
     return all(_get_key(q) == base_key for q in queries[1:])
 
-def run_phase1_infrastructure(servers, srv_groups, conn, dns_engine, settings, lock):
+def is_open_resolver_safe(status):
+    return status in {"REFUSED", "NO_RECURSION", "CLOSED", "SAFE"}
+
+def classify_open_resolver(status):
+    if status == "OPEN":
+        return {
+            "classification": "PUBLIC",
+            "resolver_exposed": True,
+            "resolver_restricted": False,
+            "confidence": "HIGH"
+        }
+    if is_open_resolver_safe(status):
+        return {
+            "classification": "RESTRICTED",
+            "resolver_exposed": False,
+            "resolver_restricted": True,
+            "confidence": "HIGH"
+        }
+    if status == "SERVFAIL":
+        return {
+            "classification": "UNKNOWN",
+            "resolver_exposed": None,
+            "resolver_restricted": None,
+            "confidence": "LOW"
+        }
+    if status in {"DISABLED", "UNREACHABLE"}:
+        return {
+            "classification": "NOT_EVALUATED",
+            "resolver_exposed": None,
+            "resolver_restricted": None,
+            "confidence": "NONE"
+        }
+    return {
+        "classification": "UNKNOWN",
+        "resolver_exposed": None,
+        "resolver_restricted": None,
+        "confidence": "LOW"
+    }
+
+def derive_server_profile(group_types):
+    normalized = {g.lower() for g in group_types if g}
+    if not normalized:
+        return "unknown"
+    if normalized == {"recursive"}:
+        return "recursive"
+    if normalized == {"authoritative"}:
+        return "authoritative"
+    return "mixed"
+
+def score_label(value):
+    if value is None:
+        return "N/A"
+    return int(value)
+
+def start_phase_watchdog(label, counters, total, active_items, lock, interval=5.0):
+    stop_event = threading.Event()
+    state = {"last_done": 0, "last_change": time.time(), "status": ""}
+
+    def _watch():
+        while not stop_event.wait(interval):
+            with lock:
+                done = counters.get("done", 0)
+                active_snapshot = list(active_items.keys())
+            now = time.time()
+            if done != state["last_done"]:
+                state["last_done"] = done
+                state["last_change"] = now
+                state["status"] = ""
+                continue
+            if done < total:
+                state["status"] = ui.format_progress_status(active_snapshot, now - state["last_change"])
+
+    watcher = threading.Thread(target=_watch, daemon=True)
+    watcher.start()
+    return stop_event, watcher, state
+
+def run_phase1_infrastructure(servers, srv_groups, srv_profiles, conn, dns_engine, settings, lock):
     """Phase 1: Deep Infrastructure Check (Once per server)."""
-    ui.print_phase("1: Server Infrastructure")
+    ui.print_phase("1: Server Infrastructure", "Testing reachability, DNS service responsiveness, encryption, and exposure.")
     phase_start_time = time.time()
     infra_results = {}
+    active_items = {}
     
     def _check_server(srv):
         srv = srv.strip()
         if not srv: return
+        with lock:
+            active_items[srv] = "server"
         
-        res = {"server": srv, "is_dead": False, "groups": srv_groups.get(srv, "N/A")}
+        res = {
+            "server": srv,
+            "is_dead": False,
+            "groups": srv_groups.get(srv, "N/A"),
+            "server_profile": srv_profiles.get(srv, "unknown"),
+            "web_risks": [],
+            "dnssec_mode": "DATA_SERVING",
+            "qname_min_confidence": "NONE"
+        }
         
         # 1. Connectivity Probes (Ping)
         ping_res = conn.ping(srv, count=settings.ping_count) if settings.enable_ping else {"is_alive": True}
         res["ping"] = "OK" if ping_res.get("is_alive") else "FAIL"
         res["latency"] = ping_res.get("avg_rtt", 0)
+        res["latency_min"] = ping_res.get("min_rtt", 0)
+        res["latency_max"] = ping_res.get("max_rtt", 0)
         res["packet_loss"] = ping_res.get("packet_loss", 0.0)
         res["ping_count"] = settings.ping_count 
         res["ping_latency_warn"] = settings.ping_latency_warn
@@ -265,7 +369,7 @@ def run_phase1_infrastructure(servers, srv_groups, conn, dns_engine, settings, l
             
             # Advanced Infrastructure Checks
             dnssec, dsec_lat = dns_engine.check_dnssec(srv) if settings.enable_dnssec_check else (False, 0)
-            logging.info(f"[PHASE 1] Server {srv}: DNSSEC support: {dnssec} ({dsec_lat:.1f}ms)")
+            logging.info(f"[PHASE 1] Server {srv}: DNSSEC data support: {dnssec} ({dsec_lat:.1f}ms)")
             res["dnssec"] = "OK" if dnssec is True else ("FAIL" if dnssec is False else "TIMEOUT")
             res["dnssec_lat"] = dsec_lat
             
@@ -278,28 +382,56 @@ def run_phase1_infrastructure(servers, srv_groups, conn, dns_engine, settings, l
             logging.info(f"[PHASE 1] Server {srv}: Open Resolver: {opn_st} ({opn_lat:.1f}ms)")
             res["open_resolver"] = opn_st
             res["open_resolver_lat"] = opn_lat
+            res.update(classify_open_resolver(opn_st))
             
             # v6.0.0 Privacy & Advanced Protocol Checks
             res["ecs"] = dns_engine.check_ecs_support(srv) if settings.enable_ecs_check else False
-            res["qname_min"] = dns_engine.check_qname_minimization(srv) if settings.enable_qname_min_check else False
+            if settings.enable_qname_min_check and res["server_profile"] in {"recursive", "mixed"}:
+                res["qname_min"] = dns_engine.check_qname_minimization(srv, rd=True)
+                res["qname_min_confidence"] = "LOW"
+            else:
+                res["qname_min"] = None
+                res["qname_min_confidence"] = "NONE"
             res["cookies"] = dns_engine.check_dns_cookies(srv) if settings.enable_dns_cookies_check else False
+            if settings.enable_web_risk_check:
+                res["web_risks"] = dns_engine.check_web_risk(srv)
         
         # Traceroute removed as requested (unused in UI)
         
         with lock:
             infra_results[srv] = res
+            active_items.pop(srv, None)
             # ui.print_infra_detail(srv, res) # No longer printing-as-we-go
             counters['done'] += 1
-            ui.print_progress(counters['done'], total, "Scanning Servers")
+            ui.print_progress(counters['done'], total, "Scanning Servers", status_suffix=watchdog_state["status"])
 
     counters = {'done': 0}
     total = len(servers)
+    stop_event, watcher, watchdog_state = start_phase_watchdog("Scanning Servers", counters, total, active_items, lock)
     with concurrent.futures.ThreadPoolExecutor(max_workers=settings.max_threads) as executor:
         list(executor.map(_check_server, servers))
+    stop_event.set()
+    watcher.join(timeout=0.1)
         
     # Calculate individual scores
     for srv in infra_results:
         infra_results[srv]['infrastructure_score'] = calculate_server_score(infra_results[srv])
+
+    # Phase 1 summary counters are needed by the terminal snapshot and analytics.
+    alive = sum(1 for r in infra_results.values() if not r['is_dead'])
+    dead = len(infra_results) - alive
+
+    ui.print_phase_snapshot(
+        "Phase 1 Snapshot",
+        [
+            ("Servers", len(infra_results)),
+            ("Alive", alive),
+            ("Dead", dead),
+            ("Public recursion", sum(1 for r in infra_results.values() if r.get("resolver_exposed") is True)),
+            ("Encrypted DNS", sum(1 for r in infra_results.values() if r.get("dot") == "OK" or r.get("doh") == "OK"))
+        ],
+        interpretation="Use this block to understand coverage before reading the detailed rows."
+    )
 
     # Order results by group then by server IP
     sorted_infra = sorted(infra_results.items(), key=lambda x: (x[1].get('groups', ''), x[0]))
@@ -311,9 +443,6 @@ def run_phase1_infrastructure(servers, srv_groups, conn, dns_engine, settings, l
         
     # Phase Summary
     # Phase 1 Analytics
-    alive = sum(1 for r in infra_results.values() if not r['is_dead'])
-    dead = len(infra_results) - alive
-    
     insights = {}
     if alive > 0:
         # Aggregated Health Index
@@ -358,9 +487,10 @@ def run_phase1_infrastructure(servers, srv_groups, conn, dns_engine, settings, l
 
 def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache, lock):
     """Phase 2: Zone Integrity & SOA Synchronization."""
-    ui.print_phase("2: Zone Integrity")
+    ui.print_phase("2: Zone Integrity", "Checking SOA visibility, authority, synchronization, transfer exposure, and policy signals.")
     phase_start_time = time.time()
     zone_results = []
+    active_items = {}
     zones = {} # domain -> list of (server, group_name)
     for entry in domains_raw:
         domain = entry.get('DOMAIN')
@@ -373,6 +503,8 @@ def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache,
                     zones[domain].append((s.strip(), group))
 
     def _check_zone(domain, srv_group_tuples):
+        with lock:
+            active_items[domain] = "zone"
         local_results = []
         serials = {}
         timers_list = []
@@ -391,7 +523,9 @@ def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache,
                 res = {
                     "domain": domain, "server": srv, "group": group_name, 
                     "serial": "N/A", "axfr_vulnerable": False, "axfr_detail": "PH1 FAIL", 
-                    "status": "UNREACHABLE", "is_dead": True
+                    "status": "UNREACHABLE", "is_dead": True,
+                    "caa_records": [], "web_risks": infra.get("web_risks", []), "dnssec": None,
+                    "latency": 0, "ns_list": [], "check_scope": "SKIPPED", "mname": "N/A", "rname": "N/A"
                 }
                 local_results.append(res); serials[srv] = "N/A"
                 continue
@@ -450,13 +584,39 @@ def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache,
                 aa = soa.get('aa', False)
                 latency = soa.get('latency', 0)
                 
+                # Reuse server-level web exposure from phase 1 when available.
+                risks = infra.get("web_risks", [])
+                web_risks[srv] = risks
+
+                if soa['status'] != "NOERROR":
+                    local_results.append({
+                        "domain": domain,
+                        "server": srv,
+                        "group": group_name,
+                        "serial": serial,
+                        "mname": mname,
+                        "rname": rname,
+                        "axfr_vulnerable": False,
+                        "axfr_detail": f"SKIPPED ({soa['status']})",
+                        "status": soa['status'],
+                        "aa": aa,
+                        "latency": latency,
+                        "ns_list": [],
+                        "soa_latency_warn": settings.soa_latency_warn,
+                        "soa_latency_crit": settings.soa_latency_crit,
+                        "axfr_allowed_groups": settings.axfr_allowed_groups,
+                        "web_risks": risks,
+                        "dnssec": None,
+                        "caa_records": [],
+                        "is_dead": False,
+                        "check_scope": "SOA_ONLY"
+                    })
+                    serials[srv] = serial
+                    continue
+
                 # DNSSEC Check
                 is_signed = dns_engine.check_zone_dnssec(srv, domain) if settings.enable_zone_dnssec_check else False
                 dnssec_status.append(is_signed)
-                
-                # Web Risk Check
-                risks = [] # Web Risk check removed (silent feature)
-                web_risks[srv] = risks
 
                 # NS Check (Check answers and authority for referrals)
                 ns_q = dns_engine.query(srv, domain, "NS", rd=is_recursive)
@@ -477,7 +637,7 @@ def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache,
                 axfr_ok, axfr_msg = dns_engine.check_axfr(srv, domain) if settings.enable_axfr_check else (False, "DISABLED")
                 logging.info(f"[PHASE 2] Zone {domain} on {srv}: SOA Serial: {serial}, AXFR: {axfr_ok} ({axfr_msg})")
                 
-                caa_ok, caa_recs = dns_engine.validate_caa(srv, domain) if settings.enable_caa_check else (False, [])
+                caa_ok, caa_recs = dns_engine.validate_caa(srv, domain, rd=is_recursive) if settings.enable_caa_check else (False, [])
                 logging.info(f"[PHASE 2] Zone {domain} on {srv}: CAA Records: {len(caa_recs)}")
                 
                 res = {
@@ -490,8 +650,9 @@ def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache,
                     "axfr_allowed_groups": settings.axfr_allowed_groups,
                     "web_risks": risks,
                     "dnssec": is_signed,
-                    "caa": caa_recs,
-                    "is_dead": False
+                    "caa_records": caa_recs,
+                    "is_dead": False,
+                    "check_scope": "FULL"
                 }
                 local_results.append(res)
             except Exception as e:
@@ -499,7 +660,10 @@ def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache,
                 # Critical: Include group in error result so UI doesn't show UNCATEGORIZED
                 local_results.append({
                     "domain": domain, "server": srv, "group": group_name,
-                    "serial": "?", "status": f"ERROR: {str(e)}", "axfr_vulnerable": False
+                    "serial": "?", "status": f"ERROR: {str(e)}", "axfr_vulnerable": False,
+                    "axfr_detail": "ERROR", "caa_records": [], "web_risks": infra.get("web_risks", []),
+                    "dnssec": None, "latency": 0, "ns_list": [], "check_scope": "ERROR",
+                    "mname": "N/A", "rname": "N/A"
                 })
 
         is_synced = len(set(s for s in serials.values() if s != "N/A")) <= 1
@@ -547,21 +711,36 @@ def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache,
 
         with lock:
             zone_results.extend(local_results)
+            active_items.pop(domain, None)
             counters['done'] += 1
-            ui.print_progress(counters['done'], total, "Checking Zones")
+            ui.print_progress(counters['done'], total, "Checking Zones", status_suffix=watchdog_state["status"])
 
     counters = {'done': 0}
     total = len(zones)
     # ui.print_phase_header("2: Zone Integrity") # Header moved down after progress
+    stop_event, watcher, watchdog_state = start_phase_watchdog("Checking Zones", counters, total, active_items, lock)
     with concurrent.futures.ThreadPoolExecutor(max_workers=settings.max_threads) as executor:
         futures = [executor.submit(_check_zone, dom, srvs) for dom, srvs in zones.items()]
         concurrent.futures.wait(futures)
+    stop_event.set()
+    watcher.join(timeout=0.1)
         
     # Calculate individual scores
     for r in zone_results:
         r['zone_score'] = calculate_zone_score(r)
 
     # Final sorted print
+    ui.print_phase_snapshot(
+        "Phase 2 Snapshot",
+        [
+            ("Domains", len(zones)),
+            ("Zone checks", len(zone_results)),
+            ("SOA-only", sum(1 for r in zone_results if r.get("check_scope") == "SOA_ONLY")),
+            ("AXFR exposed", sum(1 for r in zone_results if r.get("axfr_vulnerable"))),
+            ("Desynced domains", len({r["domain"] for r in zone_results if r.get("zone_is_synced") is False}))
+        ],
+        interpretation="Focus first on desynchronized domains and any unexpected AXFR exposure."
+    )
     ui.print_phase_header("2: Zone Integrity")
     last_domain = None
     sorted_zones = sorted(zone_results, key=lambda x: (x['domain'], x['server']))
@@ -590,8 +769,13 @@ def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache,
     inconsistent_ns = sum(1 for r in zone_results if r.get('ns_list') and len(set(tuple(r2.get('ns_list', [])) for r2 in zone_results if r2['domain'] == r['domain'])) > 1)
     
     # Phase 2 Analytics
-    sync_ok = sum(1 for r in zone_results if r.get('serial') != "?" and r.get('status') == "NOERROR")
     total_checks = len(zone_results)
+    synced_domains = set()
+    for domain in zones:
+        domain_rows = [r for r in zone_results if r['domain'] == domain]
+        successful_rows = [r for r in domain_rows if r.get('status') == "NOERROR"]
+        if successful_rows and all(r.get('zone_is_synced') for r in successful_rows):
+            synced_domains.add(domain)
     
     insights = {}
     if total_checks > 0:
@@ -599,10 +783,10 @@ def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache,
         avg_compliance = sum(r.get('zone_score', 0) for r in zone_results) / total_checks
         insights["Zone Compliance"] = f"{avg_compliance:.1f}% (Global Index)"
         
-        sync_health = (sync_ok / total_checks) * 100
-        insights["Sync Health"] = f"{sync_health:.1f}% (Global Consistency)"
+        sync_health = (len(synced_domains) / len(zones)) * 100 if zones else 0
+        insights["Sync Health"] = f"{sync_health:.1f}% (Zones fully synchronized)"
         
-        ca_adoption = sum(1 for r in zone_results if r.get('caa_recs', 0) > 0)
+        ca_adoption = sum(1 for r in zone_results if len(r.get('caa_records', [])) > 0)
         insights["CAA Adoption"] = f"{(ca_adoption / total_checks) * 100:.1f}% (SSL Policy)"
 
     phase_duration = time.time() - phase_start_time
@@ -625,12 +809,16 @@ def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache,
 
 def run_phase3_records(tasks, dns_engine, dns_groups, settings, infra_cache, results, lock):
     """Phase 3: Parallel Record Consistency Check."""
-    ui.print_phase("3: Record Consistency")
+    ui.print_phase("3: Record Consistency", "Repeating record lookups to detect divergence, dangling targets, and policy anomalies.")
     phase_start_time = time.time()
     counters = {'done': 0}
     total = len(tasks)
+    active_items = {}
     
     def _worker(target, group_name, server, record_types):
+        task_label = f"{target}@{server}"
+        with lock:
+            active_items[task_label] = group_name
         try:
             # Circuit Breaker
             infra = infra_cache.get(server, {})
@@ -644,8 +832,9 @@ def run_phase3_records(tasks, dns_engine, dns_groups, settings, infra_cache, res
                 } for rtype in record_types if rtype.strip()]
                 with lock:
                     results.extend(local_res)
+                    active_items.pop(task_label, None)
                     counters['done'] += 1
-                    ui.print_progress(counters['done'], total, "Record Consistency")
+                    ui.print_progress(counters['done'], total, "Record Consistency", status_suffix=watchdog_state["status"])
                 return
 
             local_res = []
@@ -693,7 +882,7 @@ def run_phase3_records(tasks, dns_engine, dns_groups, settings, infra_cache, res
                     if rtype in ["CNAME", "MX"]:
                         # Extract target (MX has priority first)
                         target_host = ans.split(' ')[1] if rtype == "MX" else ans.rstrip('.')
-                        chain_ok, chain_msg = dns_engine.resolve_chain(server, target_host, rtype)
+                        chain_ok, chain_msg = dns_engine.resolve_chain(server, target_host, rtype, rd=is_recursive)
                         if not chain_ok:
                             findings.append(f"Dangling {rtype} target: {target_host} ({chain_msg})")
                         else:
@@ -711,56 +900,85 @@ def run_phase3_records(tasks, dns_engine, dns_groups, settings, infra_cache, res
                     "nsid": main_q.get("nsid"), "internally_consistent": "YES" if is_consistent else "DIV!",
                     "answers": ", ".join(main_q['answers']),
                     "is_consistent": is_consistent,
-                    "findings": findings
+                    "findings": findings,
+                    "wildcard_detected": False,
+                    "wildcard_answers": [],
+                    "wildcard_scope": "ZONE"
                 }
                 logging.info(f"[PHASE 3] Query: {target} {rtype} @ {server} -> {entry['status']} ({entry['latency']:.1f}ms). Findings: {len(findings)}")
                 local_res.append(entry)
             
             with lock:
                 results.extend(local_res)
+                active_items.pop(task_label, None)
                 counters['done'] += 1
-                ui.print_progress(counters['done'], total, "Record Consistency")
+                ui.print_progress(counters['done'], total, "Record Consistency", status_suffix=watchdog_state["status"])
         except Exception as e:
             logging.error(f"[PHASE 3] Execution error for {target} @ {server}: {e}")
             with lock:
                 # Add a partial/error result instead of nothing
                 results.append({"domain": target, "group": group_name, "server": server, "type": "ERROR", "status": str(e), "latency": 0, "is_consistent": False})
+                active_items.pop(task_label, None)
                 counters['done'] += 1
-                ui.print_progress(counters['done'], total, "Record Consistency")
+                ui.print_progress(counters['done'], total, "Record Consistency", status_suffix=watchdog_state["status"])
 
     counters = {'done': 0}
     total = len(tasks)
     
+    stop_event, watcher, watchdog_state = start_phase_watchdog("Record Consistency", counters, total, active_items, lock)
     with concurrent.futures.ThreadPoolExecutor(max_workers=settings.max_threads) as executor:
         futures = [executor.submit(_worker, *t) for t in tasks]
         concurrent.futures.wait(futures)
+    stop_event.set()
+    watcher.join(timeout=0.1)
 
     # Post-collection sorting and printing
+    ui.print_phase_snapshot(
+        "Phase 3 Snapshot",
+        [
+            ("Queries", len(results)),
+            ("Successful", sum(1 for r in results if r['status'] == "NOERROR")),
+            ("Divergent", sum(1 for r in results if r.get("internally_consistent") == "DIV!")),
+            ("Findings", sum(1 for r in results if r.get("findings")))
+        ],
+        interpretation="Treat divergence as context-sensitive; repeated findings across the same domain/server deserve priority."
+    )
     ui.print_phase_header("3: Record Consistency")
     
     # Sort results
     sorted_results = sorted(results, key=lambda x: (x['domain'], x['group'], x['server']))
     
-    last_zone_srv = None # (domain, server) pair
-    
+    wildcard_cache = {}
     for r in sorted_results:
+        current_zone_srv = (r['domain'], r['server'])
+        if current_zone_srv in wildcard_cache:
+            continue
+        if r['status'] == "NOERROR":
+            is_recursive = dns_groups.get(r['group'], {}).get("type") == "recursive"
+            wildcard_cache[current_zone_srv] = dns_engine.detect_wildcard(r['server'], r['domain'], rd=is_recursive)
+        else:
+            wildcard_cache[current_zone_srv] = (False, [])
+
+    reported_wildcards = set()
+    for r in sorted_results:
+        current_zone_srv = (r['domain'], r['server'])
+        has_wc, wc_ans = wildcard_cache.get(current_zone_srv, (False, []))
+        r["wildcard_detected"] = has_wc
+        r["wildcard_answers"] = wc_ans or []
+
         print(ui.format_result(
             r['domain'], r['group'], r['server'], r['type'], r['status'], r['latency'], r['is_consistent'],
             warn_ms=settings.rec_latency_warn, crit_ms=settings.rec_latency_crit
         ))
+        ui.print_record_context(r)
         
         # Print semantic findings
         if r.get('findings'):
             ui.print_record_findings(r['findings'])
             
-        # Optional: Wildcard detection per (domain, server)
-        # We only do it once per (zone, server) to avoid spam
-        current_zone_srv = (r['domain'], r['server'])
-        if current_zone_srv != last_zone_srv and r['status'] == "NOERROR":
-            has_wc, wc_ans = dns_engine.detect_wildcard(r['server'], r['domain'])
-            if has_wc:
-                ui.print_record_findings([f"Wildcard detection triggered! Zone resolves any sub-subdomain to: {wc_ans}"])
-            last_zone_srv = current_zone_srv
+        if has_wc and current_zone_srv not in reported_wildcards:
+            reported_wildcards.add(current_zone_srv)
+            ui.print_record_findings([f"Zone-level wildcard detected: random subdomains resolved to {wc_ans}"])
     
     # Phase 3 Analytics
     succ = sum(1 for r in results if r['status'] == "NOERROR")
@@ -788,25 +1006,57 @@ def run_phase3_records(tasks, dns_engine, dns_groups, settings, infra_cache, res
 
     return results, insights
 
+def calculate_server_score_breakdown(res):
+    """Return profile-aware total/security/privacy scoring for a server."""
+    if res.get('is_dead'):
+        return {"total": 0, "security": 0, "privacy": 0, "privacy_applicable": False}
+
+    profile = res.get("server_profile", "unknown")
+    security_raw = 0
+    privacy_raw = 0
+    privacy_applicable = profile in {"recursive", "mixed"}
+
+    if res.get('dnssec') == "OK":
+        security_raw += 20
+    if res.get('cookies') is True:
+        security_raw += 15
+    if res.get('edns0') == "OK":
+        security_raw += 15
+    if res.get('resolver_restricted') is True:
+        security_raw += 15
+    if not res.get('web_risks'):
+        security_raw += 15
+
+    if profile == "authoritative":
+        if res.get('port53u_serv') == "OK":
+            security_raw += 10
+        if res.get('port53t_serv') == "OK":
+            security_raw += 10
+        security_score = min(security_raw, 100)
+        total_score = security_score
+    else:
+        if res.get('dot') == "OK":
+            privacy_raw += 25
+        if res.get('doh') == "OK":
+            privacy_raw += 25
+        if res.get('qname_min') is True:
+            privacy_raw += 25
+        if res.get('ecs') is False:
+            privacy_raw += 25
+        security_score = int((security_raw / 80) * 100)
+        privacy_score = min(privacy_raw, 100)
+        total_score = int((security_score + privacy_score) / 2)
+
+    return {
+        "total": min(total_score, 100),
+        "security": min(security_score, 100),
+        "privacy": min(privacy_score if privacy_applicable else 0, 100),
+        "privacy_applicable": privacy_applicable
+    }
+
 def calculate_server_score(res):
     """Calculate a 0-100 score for a single server infrastructure."""
-    if res.get('is_dead'): return 0
-    
-    s = 0
-    # Security markers (60 pts)
-    if res.get('dnssec') == "OK": s += 15
-    if res.get('cookies') is True: s += 15
-    if res.get('edns0') == "OK": s += 10
-    if res.get('open_resolver') == "SAFE": s += 10
-    if not res.get('web_risks'): s += 10
-    
-    # Privacy markers (40 pts)
-    if res.get('dot') == "OK": s += 10
-    if res.get('doh') == "OK": s += 10
-    if res.get('qname_min') is True: s += 10
-    if res.get('ecs') is False: s += 10 # Masked/Disabled is good for privacy
-    
-    return s
+    return calculate_server_score_breakdown(res)["total"]
 
 def calculate_zone_score(res):
     """Calculate a 0-100 score for a single zone-on-server result."""
@@ -819,7 +1069,7 @@ def calculate_zone_score(res):
     
     # Security Policies (50 pts)
     if not res.get('axfr_vulnerable'): s += 20
-    if res.get('caa_recs', 0) > 0: s += 15
+    if len(res.get('caa_records', [])) > 0: s += 15
     
     audit = res.get('zone_audit', {})
     if audit.get('dnssec'): s += 15
@@ -828,37 +1078,60 @@ def calculate_zone_score(res):
 
 def calculate_scores(infra_results, zone_results):
     """Calculate aggregated Security and Privacy scores for global summary."""
-    if not infra_results: return 0, 0
+    if not infra_results:
+        return None, None
     
     total_sec = 0
     total_priv = 0
-    server_count = len(infra_results)
+    sec_count = 0
+    priv_count = 0
     
     for srv, res in infra_results.items():
-        # Security Score (0-100)
-        s = 0
-        if res.get('dnssec') == "OK": s += 20
-        if res.get('cookies') is True: s += 20
-        if res.get('edns0') == "OK": s += 10
-        # Only REFUSED is considered explicitly SAFE by user request
-        if res.get('open_resolver') == "REFUSED": s += 10
-        if not res.get('web_risks'): s += 10
+        breakdown = calculate_server_score_breakdown(res)
+
+        security_score = breakdown["security"]
         vuln_axfr = any(z['axfr_vulnerable'] for z in zone_results if z['server'] == srv)
-        if not vuln_axfr: s += 20
-        has_caa = any(z.get('caa_recs', 0) > 0 for z in zone_results if z['server'] == srv)
-        if has_caa: s += 10
-        total_sec += s
+        if not vuln_axfr:
+            security_score = min(security_score + 10, 100)
+        has_caa = any(len(z.get('caa_records', [])) > 0 for z in zone_results if z['server'] == srv)
+        if has_caa:
+            security_score = min(security_score + 5, 100)
+
+        total_sec += security_score
+        sec_count += 1
+
+        if breakdown["privacy_applicable"]:
+            total_priv += breakdown["privacy"]
+            priv_count += 1
         
-        # Privacy Score (0-100)
-        p = 0
-        if res.get('dot') == "OK": p += 15
-        if res.get('doh') == "OK": p += 15
-        if res.get('qname_min') is True: p += 30
-        if res.get('ecs') is False: p += 20
-        if res.get('open_resolver') == "REFUSED": p += 20
-        total_priv += p
-        
-    return int(total_sec / server_count), int(total_priv / server_count)
+    sec_avg = int(total_sec / sec_count) if sec_count else None
+    priv_avg = int(total_priv / priv_count) if priv_count else None
+    return sec_avg, priv_avg
+
+def build_terminal_takeaways(infra_results, zone_results, results, security_available, privacy_available):
+    takeaways = []
+    public_resolvers = sum(1 for r in infra_results.values() if r.get("resolver_exposed") is True)
+    if public_resolvers:
+        takeaways.append(f"{public_resolvers} server(s) showed public recursion exposure.")
+
+    desynced_domains = len({z["domain"] for z in zone_results if z.get("zone_is_synced") is False})
+    if desynced_domains:
+        takeaways.append(f"{desynced_domains} domain(s) showed SOA desynchronization across tested servers.")
+
+    finding_count = sum(1 for r in results if r.get("findings"))
+    if finding_count:
+        takeaways.append(f"{finding_count} record result(s) contained semantic findings worth review.")
+
+    wildcard_pairs = len({(r["domain"], r["server"]) for r in results if r.get("wildcard_detected")})
+    if wildcard_pairs:
+        takeaways.append(f"{wildcard_pairs} zone/server pair(s) showed wildcard behavior.")
+
+    if not privacy_available and security_available:
+        takeaways.append("Privacy score was not applicable because no recursive-profile servers were fully evaluated.")
+
+    if not takeaways:
+        takeaways.append("No immediate high-priority issue was surfaced in this execution.")
+    return takeaways
 
 def main():
     script_start_time = time.time()
@@ -870,7 +1143,7 @@ def main():
         logging.info(f"Max Threads: {settings.max_threads}, Consistency Checks: {settings.consistency_checks}")
 
     parser = argparse.ArgumentParser(
-        description="FriendlyDNSReporter - Professional Suite (v6.8.0)\n"
+        description=f"FriendlyDNSReporter - Professional Suite (v{VERSION})\n"
                     "WARNING: Use at your own risk. If your DNS explodes, don't blame us.\n"
                     "Based on factual data, but subject to divine network intervention and creative firewalls.",
         formatter_class=argparse.RawDescriptionHelpFormatter
@@ -892,7 +1165,7 @@ def main():
         run_p2 = "2" in selected
         run_p3 = "3" in selected
 
-    ui.print_banner("v6.9.0")
+    ui.print_banner(VERSION)
     ui.print_disclaimer()
     ui.print_header(settings.max_threads, settings.consistency_checks, os.path.basename(args.domains))
     
@@ -907,7 +1180,7 @@ def main():
         logging.info(f"Datasets loaded: {len(domains_raw)} domains, {len(dns_groups)} groups defined.")
 
     dns_engine = DNSEngine(timeout=settings.dns_timeout, tries=settings.dns_retries)
-    conn = Connectivity(timeout=settings.timeout)
+    conn = Connectivity(timeout=settings.timeout, ping_timeout=settings.ping_timeout)
     lock = threading.Lock()
     
     # Identify which groups are actually used in domains.csv
@@ -919,31 +1192,30 @@ def main():
     # Collect servers and create a reverse mapping
     all_servers = set()
     srv_to_groups = {}
+    srv_to_types = {}
     for group, g_meta in dns_groups.items():
-        if group in active_groups:
+        if settings.only_test_active_groups and group not in active_groups:
+            continue
+        if group in active_groups or not settings.only_test_active_groups:
             all_servers.update(g_meta["servers"])
             for s in g_meta["servers"]:
                 if s not in srv_to_groups: srv_to_groups[s] = []
                 srv_to_groups[s].append(group)
+                if s not in srv_to_types:
+                    srv_to_types[s] = set()
+                srv_to_types[s].add(g_meta.get("type", "recursive"))
     
     # Format groups as strings
     for s in srv_to_groups:
         srv_to_groups[s] = ", ".join(srv_to_groups[s])
+    srv_profiles = {s: derive_server_profile(types) for s, types in srv_to_types.items()}
 
     infra_cache = {}
     
     # Run Phase 1: Infrastructure
     p1_insights = {}
     if run_p1:
-        infra_cache, p1_insights = run_phase1_infrastructure(all_servers, srv_to_groups, conn, dns_engine, settings, lock)
-
-    # Filter out dead servers for subsequent phases
-    alive_groups = {}
-    for g_name, g_meta in dns_groups.items():
-        if isinstance(g_meta, dict) and "servers" in g_meta:
-            alive_servers = [s for s in g_meta["servers"] if s in infra_cache and not infra_cache[s].get('is_dead')]
-            if alive_servers:
-                alive_groups[g_name] = alive_servers
+        infra_cache, p1_insights = run_phase1_infrastructure(all_servers, srv_to_groups, srv_profiles, conn, dns_engine, settings, lock)
 
     # Run Phase 2: Zones
     zone_results = []
@@ -969,15 +1241,31 @@ def main():
 
     # Final Analytics Calculation
     sec_score, priv_score = calculate_scores(infra_cache, zone_results)
-    avg_score = (sec_score + priv_score) / 2
-    grade = ui.format_grade(avg_score).replace("\033[92m", "").replace("\033[91m", "").replace("\033[93m", "").replace("\033[0m", "")
+    security_available = sec_score is not None
+    privacy_available = priv_score is not None
+    scores_available = security_available and privacy_available
+    avg_score = ((sec_score + priv_score) / 2) if scores_available else (sec_score if security_available else None)
+    grade = (
+        ui.format_grade(avg_score)
+        .replace("\033[92m", "")
+        .replace("\033[91m", "")
+        .replace("\033[93m", "")
+        .replace("\033[0m", "")
+        if avg_score is not None else "N/A"
+    )
     final_summary = {
         "total_queries": len(results),
         "success_queries": sum(1 for r in results if r['status'] == "NOERROR"),
         "divergences": sum(1 for r in results if r['internally_consistent'] == "DIV!"),
-        "zone_sync_issues": sum(1 for z in zone_results if z['serial'] == "?" or z['status'] == "UNREACHABLE"),
-        "security_score": sec_score,
-        "privacy_score": priv_score,
+        "zone_sync_issues": len({
+            z["domain"] for z in zone_results
+            if z.get("status") != "NOERROR" or z.get("zone_is_synced") is False
+        }),
+        "security_score": score_label(sec_score),
+        "privacy_score": score_label(priv_score),
+        "security_score_available": security_available,
+        "privacy_score_available": privacy_available,
+        "scores_available": scores_available,
         "global_grade": grade,
         "execution_time_s": round(time.time() - script_start_time, 2),
         "timestamp": datetime.now().isoformat()
@@ -989,7 +1277,7 @@ def main():
     
     report_data = {
         "metadata": {
-            "version": "6.9.1",
+            "version": VERSION,
             "timestamp": final_summary["timestamp"],
             "arguments": vars(args),
             "system_info": {
@@ -1022,6 +1310,8 @@ def main():
     # Ensure JSON is generated if HTML is enabled (as HTML now depends on it)
     if settings.enable_json_report or settings.enable_html_report:
         paths["JSON"] = reporter.export_json(report_data, f"report{suffix}.json")
+
+    paths["TXT"] = reporter.export_text(report_data, f"report{suffix}.txt")
     
     if settings.enable_csv_report:
         # 1. Details Phase 1 (Infrastructure)
@@ -1079,23 +1369,54 @@ def main():
     total = len(results)
     success = sum(1 for r in results if r['status'] == "NOERROR")
     div = sum(1 for r in results if r['internally_consistent'] == "DIV!")
-    sync_issues = sum(1 for z in zone_results if z['serial'] == "?" or z['status'] == "UNREACHABLE")
+    sync_issues = len({
+        z["domain"] for z in zone_results
+        if z.get("status") != "NOERROR" or z.get("zone_is_synced") is False
+    })
     script_duration = time.time() - script_start_time
     
     sec_score, priv_score = calculate_scores(infra_cache, zone_results)
-    avg_score = (sec_score + priv_score) / 2
-    grade = ui.format_grade(avg_score).replace("\033[92m", "").replace("\033[91m", "").replace("\033[93m", "").replace("\033[0m", "")
+    security_available = sec_score is not None
+    privacy_available = priv_score is not None
+    scores_available = security_available and privacy_available
+    avg_score = ((sec_score + priv_score) / 2) if scores_available else (sec_score if security_available else None)
+    grade = (
+        ui.format_grade(avg_score)
+        .replace("\033[92m", "")
+        .replace("\033[91m", "")
+        .replace("\033[93m", "")
+        .replace("\033[0m", "")
+        if avg_score is not None else "N/A"
+    )
     
+    takeaways = build_terminal_takeaways(infra_cache, zone_results, results, security_available, privacy_available)
+
     if settings.enable_execution_log:
+        score_display = f"{avg_score:.1f}%" if scores_available else "N/A"
         logging.info(f"FINAL SUMMARY: Total={total}, Success={success}, Divergences={div}, ZoneIssues={sync_issues}")
-        logging.info(f"FORENSIC SCORES: Security={sec_score}, Privacy={priv_score}, Grade={grade} ({avg_score:.1f}%)")
+        logging.info(f"FORENSIC SCORES: Security={score_label(sec_score)}, Privacy={score_label(priv_score)}, Grade={grade} ({score_display})")
         logging.info(f"Execution Time: {script_duration:.2f}s")
         logging.info("=============================================================================")
         logging.info("FRIENDLY DNS REPORTER FINISHED")
         logging.info("=============================================================================")
 
 
-    ui.print_summary_table(total, success, total-success, div, sync_issues, paths, script_duration, sec_score, priv_score, settings.enable_ui_legends)
+    ui.print_summary_table(
+        total,
+        success,
+        total-success,
+        div,
+        sync_issues,
+        paths,
+        script_duration,
+        sec_score if sec_score is not None else 0,
+        priv_score if priv_score is not None else 0,
+        settings.enable_ui_legends,
+        scores_available=scores_available,
+        security_available=security_available,
+        privacy_available=privacy_available,
+        takeaways=takeaways
+    )
 
 if __name__ == "__main__":
     main()

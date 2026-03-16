@@ -77,8 +77,8 @@ class DNSEngine:
                     "flags": dns.flags.to_text(response.flags).split(),
                     "aa": bool(response.flags & dns.flags.AA),
                     "tc": bool(response.flags & dns.flags.TC), # Truncated
-                    "answers": sorted(answers),
-                    "authority": sorted(authority),
+                    "answers": answers,
+                    "authority": authority,
                     "nsid": nsid,
                     "ttl": ttl,
                     "full_response": response.to_text()
@@ -101,7 +101,7 @@ class DNSEngine:
             return False, str(e)
 
     def check_dnssec(self, server):
-        """Check if a server supports DNSSEC validation. Returns (True/False/None, latency)."""
+        """Check whether a server returns DNSSEC data. This is not a validation test."""
         start = time.time()
         try:
             # We query the root zone (.) to be independent of user domains
@@ -109,9 +109,10 @@ class DNSEngine:
             response = dns.query.udp(query, server, timeout=self.timeout)
             latency = (time.time() - start) * 1000
             
-            for rrset in response.answer:
-                if rrset.rdtype == dns.rdatatype.RRSIG:
-                    return True, latency
+            has_dnskey = any(rrset.rdtype == dns.rdatatype.DNSKEY for rrset in response.answer)
+            has_rrsig = any(rrset.rdtype == dns.rdatatype.RRSIG for rrset in response.answer)
+            if has_dnskey and has_rrsig:
+                return True, latency
             return False, latency
         except dns.exception.Timeout:
             return None, self.timeout * 1000
@@ -119,29 +120,30 @@ class DNSEngine:
             return False, 0
 
     def check_open_resolver(self, server):
-        """Check if server acts as an open resolver. Returns (StatusString, latency)."""
+        """Check if server appears to provide public recursion using third-party recursion."""
         start = time.time()
         try:
-            # Query a third-party domain without recursion desired
+            # A public recursion test must request recursion.
             query = dns.message.make_query("google.com", "A")
-            query.flags &= ~dns.flags.RD 
             response = dns.query.udp(query, server, timeout=self.timeout)
             latency = (time.time() - start) * 1000
-            
-            # If it answers with an A record, it is open
-            if response.answer and response.answer[0].rdtype == dns.rdatatype.A:
-                return "OPEN", latency
-            
-            # Map specific response codes
+
             rcode = response.rcode()
+            recursion_available = bool(response.flags & dns.flags.RA)
+
+            if recursion_available and rcode in (dns.rcode.NOERROR, dns.rcode.NXDOMAIN):
+                return "OPEN", latency
+
             if rcode == dns.rcode.REFUSED:
                 return "REFUSED", latency
-            elif rcode == dns.rcode.SERVFAIL:
+
+            if not recursion_available:
+                return "NO_RECURSION", latency
+
+            if rcode == dns.rcode.SERVFAIL:
                 return "SERVFAIL", latency
-            elif rcode == dns.rcode.NOERROR:
-                return "NOERROR", latency
-            else:
-                return dns.rcode.to_text(rcode), latency
+
+            return dns.rcode.to_text(rcode), latency
                 
         except dns.exception.Timeout:
             return "TIMEOUT", self.timeout * 1000
@@ -282,13 +284,13 @@ class DNSEngine:
                 continue
         return risks
 
-    def resolve_chain(self, server, target, rtype):
+    def resolve_chain(self, server, target, rtype, rd=True):
         """Verify if a CNAME or MX target actually resolves to an IP (Dangling DNS check)."""
         try:
             # Check for both IPv4 and IPv6 resolution
             has_ip = False
             for family in ["A", "AAAA"]:
-                res = self.query(server, target, family)
+                res = self.query(server, target, family, rd=rd)
                 if res['status'] == "NOERROR" and res['answers']:
                     has_ip = True
                     break
@@ -309,14 +311,14 @@ class DNSEngine:
         except:
             return False
 
-    def detect_wildcard(self, server, domain):
+    def detect_wildcard(self, server, domain, rd=True):
         """Check if zone has a wildcard entry by querying a random sub-subdomain."""
         import random
         import string
         rand_prefix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=12))
         test_domain = f"{rand_prefix}.{domain}"
         try:
-            res = self.query(server, test_domain, "A")
+            res = self.query(server, test_domain, "A", rd=rd)
             if res['status'] == "NOERROR" and res['answers']:
                 return True, res['answers']
             return False, None
@@ -344,15 +346,10 @@ class DNSEngine:
         except:
             return False
 
-    def check_qname_minimization(self, server):
-        """Check for QNAME Minimization (RFC 7816) via qnamemintest.internet.nl."""
+    def check_qname_minimization(self, server, rd=True):
+        """Heuristic check for QNAME minimization via qnamemintest.internet.nl."""
         try:
-            # internet.nl provides a specific record for this
-            res = self.query(server, "qnamemintest.internet.nl", "A")
-            # If QNAME minimization is active, the result should be "HOORAY" or similar in TXT
-            # but usually for A record, if it resolves, it means it worked.
-            # More accurately, we check a TXT record there.
-            res_txt = self.query(server, "qnamemintest.internet.nl", "TXT")
+            res_txt = self.query(server, "qnamemintest.internet.nl", "TXT", rd=rd)
             for ans in res_txt['answers']:
                 if "HOORAY" in ans.upper(): return True
             return False
@@ -377,10 +374,10 @@ class DNSEngine:
         except:
             return False
 
-    def validate_caa(self, server, domain):
+    def validate_caa(self, server, domain, rd=True):
         """Check for CAA records (Certificate Authority Authorization)."""
         try:
-            res = self.query(server, domain, "CAA")
+            res = self.query(server, domain, "CAA", rd=rd)
             if res['status'] == "NOERROR" and res['answers']:
                 return True, res['answers']
             return False, []

@@ -5,8 +5,9 @@ import time
 from icmplib import ping as icmp_ping
 
 class Connectivity:
-    def __init__(self, timeout=2.0):
+    def __init__(self, timeout=2.0, ping_timeout=None):
         self.timeout = timeout
+        self.ping_timeout = ping_timeout if ping_timeout is not None else timeout
 
     def check_port(self, host, port):
         """Check if a TCP port is open. Returns (is_open, latency_ms)."""
@@ -22,7 +23,7 @@ class Connectivity:
         """Cross-platform ping using icmplib (best) or system ping (fallback)."""
         try:
             # icmplib provides a clean pythonic way
-            result = icmp_ping(host, count=count, timeout=self.timeout)
+            result = icmp_ping(host, count=count, timeout=self.ping_timeout)
             return {
                 "avg_rtt": result.avg_rtt,
                 "min_rtt": result.min_rtt,
