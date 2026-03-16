@@ -62,14 +62,14 @@ graph TD
     P2E --> Summary
     P3C --> Summary
 
-    Summary["Aggregate security, privacy, and execution summaries"] --> Outputs
+    Summary["Aggregate security, privacy, and execution summaries"] --> ReportGen["Generate reports and terminal output"]
 
     subgraph "Outputs"
-        Outputs["Generate reports"] --> JSON["JSON report"]
-        Outputs --> HTML["HTML dashboard"]
-        Outputs --> TXT["Plain text report"]
-        Outputs --> CSV["Optional CSV exports"]
-        Outputs --> TERM["Terminal snapshots and executive takeaways"]
+        ReportGen --> JSON["JSON report"]
+        ReportGen --> HTML["HTML dashboard"]
+        ReportGen --> TXT["Plain text report"]
+        ReportGen --> CSV["Optional CSV exports"]
+        ReportGen --> TERM["Terminal snapshots and executive takeaways"]
     end
 
     TERM --> End((End))
