@@ -2,7 +2,7 @@
 > *Because it is always DNS. Or not. But mostly yes.*
 
 [![Python](https://img.shields.io/badge/Language-Python-3776AB.svg)](https://www.python.org/)
-[![Status](https://img.shields.io/badge/Status-Stable_(v6.9.2)-green.svg)]()
+[![Status](https://img.shields.io/badge/Status-Stable_(v6.9.4)-green.svg)]()
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)]()
 
 Does your boss ask for "evidence" that DNS is broken?
@@ -15,8 +15,9 @@ This tool provides parallel DNS diagnostics for **Windows** and **Linux**, with 
 
 ## Features
 
-* **Operational Console (v6.9.2)**: Improved terminal snapshots, inline progress, executive takeaways, and export-safe output.
-* **Plain Text Report Export (v6.9.2)**: Generates a `.txt` report for tickets, copy/paste, and offline review.
+* **Observability Upgrade (v6.9.4)**: Phase 1 and Phase 2 now retain richer probe evidence, repeatability, jitter, and scope confidence.
+* **Operational Console (v6.9.4)**: Improved terminal snapshots, inline progress, executive takeaways, and export-safe output.
+* **Plain Text Report Export (v6.9.4)**: Generates a `.txt` report for tickets, copy/paste, and offline review.
 * **Forensic Analysis Console (v6.9.0)**: HTML dashboard with search, incident focus, interpretation help, and trend charts.
 * **Professional JSON Reporting (v6.8.0)**: Hierarchical output with execution metadata and system info for automation.
 * **Extended Forensic Legends**: Definitions for status markers, metrics, and scoring.
@@ -87,12 +88,17 @@ git clone https://github.com/flashbsb/FriendlyDNSReporter.git
 cd FriendlyDNSReporter
 ```
 
-2. Run the script:
+2. Install dependencies:
+```bash
+python -m pip install -r requirements.txt
+```
+
+3. Run the script:
 ```bash
 python friendly_dns_reporter.py
 ```
 
-The script currently attempts to install missing dependencies automatically on first run.
+If dependencies are missing, the script will ask before attempting any automatic installation. In non-interactive mode it will only print the manual installation command unless `--install-missing-deps` is explicitly provided.
 
 ## Usage
 
@@ -126,6 +132,7 @@ python friendly_dns_reporter.py -p 2
 | `-n` | Path to the domains CSV. Default: `config/domains.csv`. |
 | `-g` | Path to the groups CSV. Default: `config/groups.csv`. |
 | `-o` | Output directory for generated reports. |
+| `--install-missing-deps` | Explicitly allow automatic installation of missing Python dependencies. |
 | `-h` | Show command help. |
 
 Parallelism, consistency count, timeouts, scoring options, and feature toggles are configured in `config/settings.ini`.
@@ -138,15 +145,15 @@ The `config/settings.ini` file centralizes runtime behavior:
 - `MAX_THREADS`: parallelism limit.
 - `DNS_TIMEOUT` / `DNS_RETRIES`: DNS engine behavior.
 - `STRICT_*_CHECK`: record consistency tolerance for IPs, order, and TTL.
-- `ENABLE_*_REPORT`: control JSON, HTML, CSV, and related outputs.
+- `ENABLE_*_REPORT`: control JSON, HTML, TXT, CSV, and related outputs.
 
 ## Reports
 
 The tool can generate:
 
-- `JSON`: full structured report used by the dashboard.
-- `HTML`: interactive forensic dashboard.
-- `TXT`: plain text summary for copy/paste and attachments.
+- `JSON`: full structured report used by the dashboard and the richest machine-readable output.
+- `HTML`: interactive forensic dashboard. When HTML is enabled, JSON is generated as its backing data source.
+- `TXT`: optional plain text report for copy/paste and attachments.
 - `CSV`: optional phase detail and summary exports.
 
 ## Technical Glossary

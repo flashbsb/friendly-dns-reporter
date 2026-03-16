@@ -4,6 +4,7 @@ UI and Terminal Formatting for FriendlyDNSReporter.
 import re
 import sys
 import shutil
+from core.version import VERSION
 
 COLOR_ENABLED = sys.stdout.isatty()
 
@@ -48,6 +49,88 @@ def _format_metrics(items, width=3):
         chunks.append(" | ".join(row))
     return chunks
 
+def _ellipsize(text, width):
+    text = str(text)
+    if len(text) <= width:
+        return text
+    if width <= 3:
+        return text[:width]
+    return text[:width - 3] + "..."
+
+def _compact_status(status, width=12):
+    normalized = str(status)
+    replacements = {
+        "UNREACHABLE": "UNREACH",
+        "NO_RECURSION": "NO_RECUR",
+        "DISABLED": "DISABLED",
+        "REFUSED": "REFUSED",
+    }
+    normalized = replacements.get(normalized, normalized)
+    return _ellipsize(normalized, width)
+
+def _fmt_latency(value, precision=0, na="N/A"):
+    if value is None:
+        return na
+    try:
+        return f"{float(value):.{precision}f}ms"
+    except (TypeError, ValueError):
+        return na
+
+def _fmt_probe_evidence(data, probe_name, label=None):
+    label = label or probe_name
+    protocol = data.get(f"{probe_name}_protocol")
+    rcode = data.get(f"{probe_name}_rcode")
+    flags = data.get(f"{probe_name}_flags") or []
+    query_size = data.get(f"{probe_name}_query_size")
+    response_size = data.get(f"{probe_name}_response_size")
+    authority_count = data.get(f"{probe_name}_authority_count")
+    answer_count = data.get(f"{probe_name}_answer_count")
+    aa = data.get(f"{probe_name}_aa")
+    tc = data.get(f"{probe_name}_tc")
+    http_status = data.get(f"{probe_name}_http_status")
+    ra = data.get(f"{probe_name}_ra")
+
+    details = []
+    if protocol:
+        details.append(f"proto={protocol}")
+    if rcode:
+        details.append(f"rcode={rcode}")
+    if flags:
+        details.append(f"flags={','.join(str(f) for f in flags[:4])}")
+    if query_size is not None:
+        details.append(f"q={query_size}B")
+    if response_size is not None:
+        details.append(f"r={response_size}B")
+    if authority_count is not None:
+        details.append(f"auth={authority_count}")
+    if answer_count is not None:
+        details.append(f"answers={answer_count}")
+    if aa is not None:
+        details.append(f"aa={'Y' if aa else 'N'}")
+    if tc is not None:
+        details.append(f"tc={'Y' if tc else 'N'}")
+    if http_status is not None:
+        details.append(f"http={http_status}")
+    if ra is not None:
+        details.append(f"ra={'Y' if ra else 'N'}")
+
+    if not details:
+        return f"{label}=N/A"
+    return f"{label}=" + ",".join(details)
+
+def _fmt_probe_repeat(data, probe_name, label=None):
+    label = label or probe_name
+    sample_count = data.get(f"{probe_name}_sample_count", 0) or 0
+    if sample_count <= 0:
+        return f"{label}=N/E"
+    avg_latency = _fmt_latency(data.get(f"{probe_name}_latency_avg"))
+    min_latency = _fmt_latency(data.get(f"{probe_name}_latency_min"))
+    max_latency = _fmt_latency(data.get(f"{probe_name}_latency_max"))
+    jitter = _fmt_latency(data.get(f"{probe_name}_latency_jitter"))
+    stable = data.get(f"{probe_name}_status_consistent")
+    stable_str = "stable" if stable is True else ("flap" if stable is False else "n/e")
+    return f"{label}={sample_count}x {stable_str} [{min_latency}/{avg_latency}/{max_latency}] j={jitter}"
+
 def get_score_color(score):
     if score >= 90: return OK
     if score >= 70: return WARN
@@ -62,7 +145,7 @@ def format_grade(score):
     if score >= 60: return f"{WARN}D{RESET}"
     return f"{FAIL}F{RESET}"
 
-def print_banner(version="6.9.2"):
+def print_banner(version=VERSION):
     print("\n" + "=" * 80)
     print(f"{BOLD}FRIENDLY DNS REPORTER {version}{RESET}")
     print("=" * 80)
@@ -115,14 +198,14 @@ def print_phase_snapshot(title, items, interpretation=None):
 
 def print_phase_header(name):
     if "1" in name:
-        print(f"  {INFO}{'GROUP':11}{RESET} | {INFO}{'IP ADDRESS':15}{RESET} | {'PING (R/S % ms)':16} | {'U53':10} | {'T53':10} | {'DoT':5} | {'DoH':5} | {'Sc':3} | {'CAPS (S E K Q X)':15} | {'OpenRes':9} | Status")
-        print("-" * 145)
+        print(f"  {INFO}{'GROUP':11}{RESET} | {INFO}{'IP ADDRESS':15}{RESET} | {'PING':16} | {'U53':10} | {'T53':10} | {'DoT':5} | {'DoH':5} | {'Sc':3} | {'CAPS':15} | {'Resolver':12} | Status")
+        print("-" * 137)
     elif "2" in name:
-        print(f"  {'Domain':30} | {'Group':11} | {'Server':15} | {'SOA Serial':18} | {'Lat':7} | {'Sc':3} | {'AA':4} | AXFR Status")
-        print("-" * 120)
+        print(f"  {'Domain':28} | {'Group':11} | {'Server':15} | {'SOA Serial':16} | {'Lat':7} | {'Sc':3} | {'AA':4} | {'AXFR':12}")
+        print("-" * 114)
     elif "3" in name:
-        print(f"  {'Domain':30} | {'Group':11} | {'Server':15} | {'Type':5} | {'Status':12} | {'Lat':7} | Sync")
-        print("-" * 115)
+        print(f"  {'Domain':28} | {'Group':11} | {'Server':15} | {'Type':5} | {'Status':12} | {'Lat':7} | Sync")
+        print("-" * 113)
 
 def print_summary_table(total, success, fail, div, sync_issues, reports, duration: float = 0.0, sec_score=0, priv_score=0, show_legend=True, scores_available=True, security_available=True, privacy_available=True, takeaways=None):
     print("\n" + "=" * 80)
@@ -197,9 +280,9 @@ def _fmt_port_serv(port_status, serv_status, lat):
     if port_status == "CLOSED" or port_status == "FAIL":
         return FAIL, "CLOSE"
     if serv_status == "OK":
-        return OK, f"OK({lat:.0f}ms)"
+        return OK, f"OK({_fmt_latency(lat, 0)})" if lat is not None else "OK(N/A)"
     # Port is open but service failed/timeout
-    return WARN, f"P_ONLY({lat:.0f}ms)"
+    return WARN, f"P_ONLY({_fmt_latency(lat, 0)})" if lat is not None else "P_ONLY(N/A)"
 
 def print_infra_detail(srv, data):
     ping_loss = data.get('packet_loss', 0.0)
@@ -212,7 +295,7 @@ def print_infra_detail(srv, data):
     
     if data['ping'] == "OK":
         loss_pct = int(ping_loss * 100)
-        lat = data['latency']
+        lat = data.get('latency') or 0
         if loss_pct >= loss_crit or lat >= lat_crit: ping_clr = CRIT
         elif loss_pct >= loss_warn or lat >= lat_warn: ping_clr = WARN
         else: ping_clr = OK
@@ -228,11 +311,11 @@ def print_infra_detail(srv, data):
         ping_str = "FAIL"
         
     # Deep Probes
-    p53u_clr, p53u_str = _fmt_port_serv(data.get('port53u', 'OPEN'), data.get('port53u_serv', 'FAIL'), data.get('recursion_lat', 0))
+    p53u_clr, p53u_str = _fmt_port_serv(data.get('port53u', 'OPEN'), data.get('port53u_serv', 'FAIL'), data.get('recursion_lat'))
     # Note: Using port53t_serv and port53t_lat for consistency
-    p53t_clr, p53t_str = _fmt_port_serv(data.get('port53t', 'CLOSED'), data.get('port53t_serv', 'FAIL'), data.get('port53t_lat', 0))
-    dot_clr, dot_str = _fmt_port_serv(data.get('port853', 'CLOSED'), data.get('port853_serv', 'FAIL'), data.get('dot_lat', 0))
-    doh_clr, doh_str = _fmt_port_serv(data.get('port443', 'CLOSED'), data.get('port443_serv', 'FAIL'), data.get('doh_lat', 0))
+    p53t_clr, p53t_str = _fmt_port_serv(data.get('port53t', 'CLOSED'), data.get('port53t_serv', 'FAIL'), data.get('port53t_lat'))
+    dot_clr, dot_str = _fmt_port_serv(data.get('port853', 'CLOSED'), data.get('port853_serv', 'FAIL'), data.get('dot_lat'))
+    doh_clr, doh_str = _fmt_port_serv(data.get('port443', 'CLOSED'), data.get('port443_serv', 'FAIL'), data.get('doh_lat'))
     
     # Privacy/Security Capabilities (S=SEC, E=EDNS, C=Cookies, Q=QNAME-Min, X=ECS)
     def _cap(key, char):
@@ -243,14 +326,18 @@ def print_infra_detail(srv, data):
     
     caps = f"{_cap('dnssec', 'S')} {_cap('edns0', 'E')} {_cap('cookies', 'K')} {_cap('qname_min', 'Q')} {_cap('ecs', 'X')}"
 
-    openres = data.get('open_resolver', 'SAFE')
+    openres = data.get('open_resolver', 'UNKNOWN')
     if openres == "OPEN":
         openres_clr = FAIL
     elif openres in ["TIMEOUT", "SERVFAIL", "ERROR"]:
         openres_clr = WARN
     else:
         openres_clr = OK
-    openres_str = f"{openres} ({data.get('open_resolver_lat', 0):.0f}ms)" if openres in ["OPEN", "REFUSED", "SERVFAIL", "NO_RECURSION"] else openres
+    openres_str = openres
+    if openres in ["OPEN", "REFUSED", "SERVFAIL", "NO_RECURSION"]:
+        openres_lat = _fmt_latency(data.get('open_resolver_lat'), 0)
+        openres_str = f"{openres}/{openres_lat}"
+    openres_str = _ellipsize(openres_str, 12)
     
     alive_str = f"{OK}ALIVE{RESET}" if not data['is_dead'] else f"{FAIL}DEAD{RESET}"
     group_str = data.get('groups', '')
@@ -262,7 +349,7 @@ def print_infra_detail(srv, data):
     score_str = f"{score_clr}{score:3d}{RESET}"
 
     # Layout: Group | Server | Ping | U53 | T53 | DoT | DoH | Sc | Caps | OpenRes | Status
-    print(f"  {INFO}{group_str:11}{RESET} | {srv:15} | {ping_clr}{ping_str:16}{RESET} | {p53u_clr}{p53u_str:10}{RESET} | {p53t_clr}{p53t_str:10}{RESET} | {dot_clr}{dot_str:5.5}{RESET} | {doh_clr}{doh_str:5.5}{RESET} | {score_str} | {caps} | {openres_clr}{openres_str:9}{RESET} | {alive_str}")
+    print(f"  {INFO}{group_str:11}{RESET} | {srv:15} | {ping_clr}{_ellipsize(ping_str, 16):16}{RESET} | {p53u_clr}{p53u_str:10}{RESET} | {p53t_clr}{p53t_str:10}{RESET} | {dot_clr}{dot_str:5.5}{RESET} | {doh_clr}{doh_str:5.5}{RESET} | {score_str} | {caps} | {openres_clr}{openres_str:12}{RESET} | {alive_str}")
 
     profile = data.get("server_profile", "unknown")
     resolver_class = data.get("classification", "UNKNOWN")
@@ -273,7 +360,47 @@ def print_infra_detail(srv, data):
     print(
         f"      Profile={profile} | Resolver={resolver_class}/{resolver_conf} | "
         f"Version={version} | DNSSEC={data.get('dnssec_mode', 'DATA_SERVING')} | "
-        f"QNAME-Min={data.get('qname_min_confidence', 'NONE')} | WebRisk={web_risk_str}"
+        f"QNAME-Min={data.get('qname_min_confidence', 'NONE')} | WebRisk={web_risk_str} | "
+        f"Coverage={data.get('probe_coverage_ratio', 'N/A')}%"
+    )
+    print(
+        "      Timings: "
+        f"Ping={_fmt_latency(data.get('latency'))} [{_fmt_latency(data.get('latency_min'))}..{_fmt_latency(data.get('latency_max'))}] | "
+        f"UDP53={_fmt_latency(data.get('udp53_probe_lat'))} | "
+        f"TCP53(conn/probe)={_fmt_latency(data.get('port53t_conn_lat'))}/{_fmt_latency(data.get('port53t_probe_lat'))} | "
+        f"Version={_fmt_latency(data.get('version_lat'))} | Recursion={_fmt_latency(data.get('recursion_lat'))} | "
+        f"DoT(conn/probe)={_fmt_latency(data.get('port853_conn_lat'))}/{_fmt_latency(data.get('dot_lat'))} | "
+        f"DoH(conn/probe)={_fmt_latency(data.get('port443_conn_lat'))}/{_fmt_latency(data.get('doh_lat'))} | "
+        f"DNSSEC={_fmt_latency(data.get('dnssec_lat'))} | EDNS0={_fmt_latency(data.get('edns0_lat'))} | "
+        f"ECS={_fmt_latency(data.get('ecs_lat'))} | QNAME={_fmt_latency(data.get('qname_min_lat'))} | "
+        f"Cookies={_fmt_latency(data.get('cookies_lat'))} | WebRisk={_fmt_latency(data.get('web_risk_lat'))} | "
+        f"OpenRes={_fmt_latency(data.get('open_resolver_lat'))}"
+    )
+    print(
+        "      Observability: "
+        f"UDP53={data.get('udp53_probe_timing_source', '-')}:{data.get('udp53_probe_failure_reason', '-')} | "
+        f"TCP53={data.get('tcp53_probe_timing_source', '-')}:{data.get('tcp53_probe_failure_reason', '-')} | "
+        f"ECS={data.get('ecs_timing_source', '-')}:{data.get('ecs_failure_reason', '-')} | "
+        f"QNAME={data.get('qname_min_timing_source', '-')}:{data.get('qname_min_failure_reason', '-')} | "
+        f"Cookies={data.get('cookies_timing_source', '-')}:{data.get('cookies_failure_reason', '-')} | "
+        f"Web80={data.get('web_risk_status', {}).get(80, '-')} Web443={data.get('web_risk_status', {}).get(443, '-')}"
+    )
+    print(
+        "      Evidence: "
+        f"{_fmt_probe_evidence(data, 'version', 'Version')} | "
+        f"{_fmt_probe_evidence(data, 'recursion', 'Recursion')} | "
+        f"{_fmt_probe_evidence(data, 'dnssec', 'DNSSEC')} | "
+        f"{_fmt_probe_evidence(data, 'edns0', 'EDNS0')} | "
+        f"{_fmt_probe_evidence(data, 'open_resolver', 'OpenRes')} | "
+        f"{_fmt_probe_evidence(data, 'doh_probe', 'DoH')}"
+    )
+    print(
+        "      Repeatability: "
+        f"{_fmt_probe_repeat(data, 'udp53_probe', 'UDP53')} | "
+        f"{_fmt_probe_repeat(data, 'tcp53_probe', 'TCP53')} | "
+        f"{_fmt_probe_repeat(data, 'dot_probe', 'DoT')} | "
+        f"{_fmt_probe_repeat(data, 'doh_probe', 'DoH')} | "
+        f"{_fmt_probe_repeat(data, 'open_resolver', 'OpenRes')}"
     )
 
 def print_zone_detail(srv, domain, res):
@@ -281,7 +408,7 @@ def print_zone_detail(srv, domain, res):
     status = res.get('status', 'ERROR')
     axfr_ok = res.get('axfr_vulnerable', False)
     aa = res.get('aa', False)
-    lat = res.get('latency', 0)
+    lat = res.get('latency')
     synced = res.get('zone_is_synced', True)
     
     # SOA Serial Status Formatting
@@ -328,14 +455,15 @@ def print_zone_detail(srv, domain, res):
     lat_warn = res.get('soa_latency_warn', 500)
     lat_crit = res.get('soa_latency_crit', 1500)
     
-    if lat >= lat_crit:
+    lat_eval = lat or 0
+    if lat_eval >= lat_crit:
         lat_clr = FAIL
-    elif lat >= lat_warn:
+    elif lat_eval >= lat_warn:
         lat_clr = WARN
     else:
         lat_clr = OK
         
-    lat_str = f"{lat_clr}{lat:4.0f}ms{RESET}" if status == "NOERROR" else " --  "
+    lat_str = f"{lat_clr}{lat_eval:4.0f}ms{RESET}" if lat is not None else " N/A "
     
     group_str = res.get('group', 'UNCATEGORIZED')
     if len(group_str) > 11:
@@ -346,17 +474,44 @@ def print_zone_detail(srv, domain, res):
     score_clr = get_score_color(score)
     score_str = f"{score_clr}{score:3d}{RESET}"
 
-    print(f"  {domain:30} | {INFO}{group_str:11}{RESET} | {srv:15} | {serial_str:18} | {lat_str} | {score_str} | {aa_str} | {axfr_clr}{axfr_str:18}{RESET}")
+    domain_str = _ellipsize(domain, 28)
+    server_str = _ellipsize(srv, 15)
+    serial_out = serial_str if status == "NOERROR" else f"{FAIL}{_compact_status(status, 16):16}{RESET}"
+    axfr_out = _ellipsize(axfr_str, 12)
+    print(f"  {domain_str:28} | {INFO}{group_str:11}{RESET} | {server_str:15} | {serial_out:16} | {lat_str} | {score_str} | {aa_str} | {axfr_clr}{axfr_out:12}{RESET}")
 
     dnssec = res.get("dnssec")
     dnssec_str = "SIGNED" if dnssec is True else ("UNSIGNED" if dnssec is False else "N/E")
     caa_count = len(res.get("caa_records", []))
-    ns_consistent = "YES" if res.get("ns_consistent", True) else "NO"
+    ns_consistent_val = res.get("ns_consistent")
+    ns_consistent = "YES" if ns_consistent_val is True else ("NO" if ns_consistent_val is False else "N/E")
     scope = res.get("check_scope", "FULL")
     web_risk = ",".join(str(p) for p in res.get("web_risks", [])) or "none"
     print(
         f"      Status={status} | Scope={scope} | DNSSEC={dnssec_str} | "
-        f"CAA={caa_count} | NS-Consistent={ns_consistent} | WebRisk={web_risk}"
+        f"CAA={caa_count} | NS-Consistent={ns_consistent} | WebRisk={web_risk} | "
+        f"Confidence={res.get('scope_confidence', 'N/A')} | Fallback={'YES' if res.get('used_fallback') else 'NO'}"
+    )
+    print(
+        "      Timings: "
+        f"SOA={_fmt_latency(res.get('soa_latency'))} | "
+        f"SOA-Fallback={_fmt_latency(res.get('soa_fallback_latency'))} | "
+        f"NS={_fmt_latency(res.get('ns_latency'))} | "
+        f"AXFR={_fmt_latency(res.get('axfr_latency'))} | "
+        f"CAA={_fmt_latency(res.get('caa_latency'))} | "
+        f"Zone-DNSSEC={_fmt_latency(res.get('zone_dnssec_latency'))}"
+    )
+    print(
+        "      Evidence: "
+        f"{_fmt_probe_evidence(res, 'soa', 'SOA')} | "
+        f"{_fmt_probe_evidence(res, 'ns', 'NS')} | "
+        f"{_fmt_probe_evidence(res, 'caa', 'CAA')} | "
+        f"{_fmt_probe_evidence(res, 'zone_dnssec', 'ZoneDNSSEC')}"
+    )
+    print(
+        "      Repeatability: "
+        f"{_fmt_probe_repeat(res, 'soa', 'SOA')} | "
+        f"{_fmt_probe_repeat(res, 'ns', 'NS')}"
     )
 
 def print_zone_audit_block(domain, audit):
@@ -415,13 +570,19 @@ def format_result(target, group, server, rtype, status, latency, is_consistent, 
         status_clr = FAIL
         
     lat_clr = OK
-    if latency >= crit_ms:
+    latency_eval = latency or 0
+    if latency_eval >= crit_ms:
         lat_clr = FAIL
-    elif latency >= warn_ms:
+    elif latency_eval >= warn_ms:
         lat_clr = WARN
         
     consistency_str = f" [{WARN}DIV!{RESET}]" if not is_consistent else f"{OK}OK{RESET}"
-    return f"  [{INFO}REC{RESET}] {target:30} | {INFO}{group:11}{RESET} | {server:15} | {rtype:5} | {status_clr}{status:12}{RESET} | {lat_clr}{latency:4.1f}ms{RESET} | {consistency_str}"
+    target_str = _ellipsize(target, 28)
+    group_str = _ellipsize(group, 11)
+    server_str = _ellipsize(server, 15)
+    status_str = _compact_status(status, 12)
+    latency_str = f"{lat_clr}{latency_eval:4.1f}ms{RESET}" if latency is not None else " N/A "
+    return f"  [{INFO}REC{RESET}] {target_str:28} | {INFO}{group_str:11}{RESET} | {server_str:15} | {rtype:5} | {status_clr}{status_str:12}{RESET} | {latency_str} | {consistency_str}"
 
 def print_record_findings(findings):
     """Print semantic findings/warnings for a specific record."""
@@ -446,11 +607,16 @@ def print_record_context(record):
         answers = answers[:107] + "..."
 
     nsid = record.get("nsid") or "-"
+    nsid = _ellipsize(nsid, 24)
     print(
         "       "
         f"Ping={record.get('ping', 'N/A')} | Port53={record.get('port53', 'N/A')} | "
         f"Rec={record.get('recursion', 'N/A')} | DoT={record.get('dot', 'N/A')} | "
-        f"DoH={record.get('doh', 'N/A')} | NSID={nsid} | Answers={answers}"
+        f"DoH={record.get('doh', 'N/A')} | Query={_fmt_latency(record.get('latency'), 1)} | "
+        f"First/Avg={_fmt_latency(record.get('latency_first'), 1)}/{_fmt_latency(record.get('latency_avg'), 1)} | "
+        f"Min/Max={_fmt_latency(record.get('latency_min'), 1)}/{_fmt_latency(record.get('latency_max'), 1)} | "
+        f"Chain={_fmt_latency(record.get('chain_latency'), 1)} | MX25={_fmt_latency(record.get('mx_port25_latency'), 1)} | "
+        f"Wildcard={_fmt_latency(record.get('wildcard_latency'), 1)} | NSID={nsid} | Answers={answers}"
     )
 
 def print_progress(current, total, prefix="", length=30, status_suffix=""):
@@ -507,7 +673,7 @@ def print_legend_phase1_analytics():
     print(f"  {BOLD}PHASE 1: ANALYTICS CRITERIA{RESET}")
     print(f"  - {BOLD}Infra Health{RESET} : Average health score across infrastructure. 100% = All services up with modern security.")
     print(f"  - {BOLD}Adoption{RESET}     : Percentage of servers deployed with DoH, DoT, DNSSEC and Cookies.")
-    print(f"  - {BOLD}Net-Health{RESET}   : Network SLA index (Latency vs Warn/Crit limits configured in settings.ini).")
+    print(f"  - {BOLD}Net-Health{RESET}   : Composite latency index based on all successful probe timings, not ping alone.")
     print("-" * 50)
 
 def print_legend_phase2_table():
@@ -525,6 +691,7 @@ def print_legend_phase2_analytics():
     print(f"  - {BOLD}Zone Compliance{RESET}: Overall adherence score to zone security and synchronization standards.")
     print(f"  - {BOLD}Sync Health{RESET}    : Percentage of tested domains whose authoritative servers shared the same SOA serial.")
     print(f"  - {BOLD}CAA Adoption{RESET}   : Certificate Authority Authorization usage to prevent SSL hijacking.")
+    print(f"  - {BOLD}Zone Resp-Health{RESET}: Composite latency index across successful SOA, NS, AXFR, CAA and zone-DNSSEC probes.")
     print("-" * 50)
 
 def print_legend_phase3_table():
@@ -540,6 +707,7 @@ def print_legend_phase3_analytics():
     print(f"  {BOLD}PHASE 3: ANALYTICS CRITERIA{RESET}")
     print(f"  - {BOLD}Stability Index{RESET}: Percentage of queries that returned identical results across sequential checks.")
     print(f"  - {BOLD}Finding Density{RESET}: Average volume of semantic issues detected per record query.")
+    print(f"  - {BOLD}Resp-Health / Jitter{RESET}: Timing quality based on avg response latency and spread across repeated checks.")
     print("-" * 50)
 
 def print_legend_summary():

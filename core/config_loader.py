@@ -60,6 +60,10 @@ class Settings:
         return self.get_bool("REPORTS", "ENABLE_CSV_REPORT", True)
 
     @property
+    def enable_text_report(self):
+        return self.get_bool("REPORTS", "ENABLE_TEXT_REPORT", False)
+
+    @property
     def enable_report_timestamps(self):
         return self.get_bool("REPORTS", "ENABLE_REPORT_TIMESTAMPS", True)
 
@@ -111,6 +115,10 @@ class Settings:
         return self.get_float("CONNECTIVITY", "PING_TIMEOUT", 2.0)
 
     @property
+    def phase1_probe_repeats(self):
+        return max(1, self.get_int("CONNECTIVITY", "PHASE1_PROBE_REPEATS", 2))
+
+    @property
     def ping_latency_warn(self):
         return self.get_int("CONNECTIVITY", "PING_LATENCY_WARN", 100)
 
@@ -133,6 +141,10 @@ class Settings:
     @property
     def soa_latency_crit(self):
         return self.get_int("CONNECTIVITY", "SOA_LATENCY_CRIT", 1500)
+
+    @property
+    def phase2_probe_repeats(self):
+        return max(1, self.get_int("CONNECTIVITY", "PHASE2_PROBE_REPEATS", 2))
 
 
     # --- ADVANCED CHECKS ---

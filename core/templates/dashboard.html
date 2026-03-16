@@ -99,10 +99,11 @@
         .help-card li { font-size: 12px; color: var(--text-primary); }
         .help-card li span { color: var(--text-secondary); }
 
-        .help-chip { display:inline-flex; align-items:center; justify-content:center; width:18px; height:18px; border-radius:999px; background: rgba(94,168,255,0.14); color: var(--accent-2); font-size:11px; font-weight:800; margin-left:6px; vertical-align:middle; cursor:help; border:1px solid rgba(94,168,255,0.22); }
+        .help-chip { display:inline-flex; align-items:center; justify-content:center; width:18px; height:18px; border-radius:999px; background: rgba(94,168,255,0.14); color: var(--accent-2); font-size:11px; font-weight:800; margin-left:6px; vertical-align:middle; cursor:pointer; border:1px solid rgba(94,168,255,0.22); }
         .help-tip { position: relative; display:inline-flex; align-items:center; }
         .help-tip .help-bubble { position:absolute; bottom:130%; left:50%; transform:translateX(-50%); width:260px; background: rgba(10,16,28,0.96); border:1px solid var(--border); color: var(--text-primary); padding:10px 12px; border-radius: 12px; box-shadow: var(--shadow); font-size:11px; line-height:1.45; opacity:0; pointer-events:none; transition:opacity .16s ease, transform .16s ease; z-index:120; }
         .help-tip:hover .help-bubble { opacity:1; transform:translateX(-50%) translateY(-4px); }
+        .help-tip.open .help-bubble { opacity:1; transform:translateX(-50%) translateY(-4px); pointer-events:auto; }
         .help-tip .help-bubble strong { color:#fff; display:block; margin-bottom:4px; }
 
         .charts-container { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 15px; margin-bottom: 24px; }
@@ -367,12 +368,29 @@
             }
         },
 
+        toggleHelp(event) {
+            event.preventDefault();
+            event.stopPropagation();
+            const tip = event.currentTarget.closest('.help-tip');
+            if (!tip) return;
+            document.querySelectorAll('.help-tip.open').forEach(node => {
+                if (node !== tip) node.classList.remove('open');
+            });
+            tip.classList.toggle('open');
+        },
+
         setSort(key) {
             if (this.sortKey === key) this.sortDesc = !this.sortDesc;
             else { this.sortKey = key; this.sortDesc = false; }
             uiRenderer.renderDetails();
         }
     };
+
+    document.addEventListener('click', (event) => {
+        if (!event.target.closest('.help-tip')) {
+            document.querySelectorAll('.help-tip.open').forEach(node => node.classList.remove('open'));
+        }
+    });
 
     const uiRenderer = {
         filter: '',
@@ -388,7 +406,82 @@
         help(label, title, body) {
             const tooltip = `${title}: ${body}`;
             const escaped = this.escapeAttr(tooltip);
-            return `${label}<span class="help-tip" title="${escaped}" aria-label="${escaped}"><span class="help-chip">?</span><span class="help-bubble"><strong>${title}</strong>${body}</span></span>`;
+            return `${label}<span class="help-tip" title="${escaped}" aria-label="${escaped}"><button type="button" class="help-chip" aria-label="${escaped}" onclick="dataManager.toggleHelp(event)">?</button><span class="help-bubble"><strong>${title}</strong>${body}</span></span>`;
+        },
+
+        matchesFilter(item) {
+            return !this.filter || JSON.stringify(item).toLowerCase().includes(this.filter);
+        },
+
+        getFilteredSlices() {
+            const det = dataManager.current.detailed_results || {};
+            const infrastructure = Object.entries(det.infrastructure || {}).map(([ip, d]) => ({ ip, ...d }));
+            const zones = det.zones || [];
+            const records = det.records || [];
+            return {
+                infrastructure: infrastructure.filter(item => this.matchesFilter(item)),
+                zones: zones.filter(item => this.matchesFilter(item)),
+                records: records.filter(item => this.matchesFilter(item))
+            };
+        },
+
+        getFilterContext() {
+            const filtered = this.getFilteredSlices();
+            return {
+                filtered,
+                total: filtered.infrastructure.length + filtered.zones.length + filtered.records.length,
+                active: Boolean(this.filter)
+            };
+        },
+
+        renderEmptyTable(colspan, message) {
+            return `<tr><td colspan="${colspan}" style="text-align:center; color:var(--text-secondary)">${message}</td></tr>`;
+        },
+
+        fmtLatency(value, precision = 0) {
+            if (value === null || value === undefined || value === '') return 'N/A';
+            const numeric = Number(value);
+            return Number.isFinite(numeric) ? `${numeric.toFixed(precision)}ms` : 'N/A';
+        },
+
+        fmtProbeEvidence(item, probeName, label) {
+            const protocol = item[`${probeName}_protocol`];
+            const rcode = item[`${probeName}_rcode`];
+            const flags = item[`${probeName}_flags`] || [];
+            const querySize = item[`${probeName}_query_size`];
+            const responseSize = item[`${probeName}_response_size`];
+            const authorityCount = item[`${probeName}_authority_count`];
+            const answerCount = item[`${probeName}_answer_count`];
+            const aa = item[`${probeName}_aa`];
+            const tc = item[`${probeName}_tc`];
+            const httpStatus = item[`${probeName}_http_status`];
+            const ra = item[`${probeName}_ra`];
+
+            const parts = [];
+            if (protocol) parts.push(`proto=${protocol}`);
+            if (rcode) parts.push(`rcode=${rcode}`);
+            if (flags.length) parts.push(`flags=${flags.slice(0, 4).join(',')}`);
+            if (querySize !== null && querySize !== undefined) parts.push(`q=${querySize}B`);
+            if (responseSize !== null && responseSize !== undefined) parts.push(`r=${responseSize}B`);
+            if (authorityCount !== null && authorityCount !== undefined) parts.push(`auth=${authorityCount}`);
+            if (answerCount !== null && answerCount !== undefined) parts.push(`answers=${answerCount}`);
+            if (aa !== null && aa !== undefined) parts.push(`aa=${aa ? 'Y' : 'N'}`);
+            if (tc !== null && tc !== undefined) parts.push(`tc=${tc ? 'Y' : 'N'}`);
+            if (httpStatus !== null && httpStatus !== undefined) parts.push(`http=${httpStatus}`);
+            if (ra !== null && ra !== undefined) parts.push(`ra=${ra ? 'Y' : 'N'}`);
+            return `${label}=${parts.length ? parts.join(',') : 'N/A'}`;
+        },
+
+        fmtProbeRepeat(item, probeName, label) {
+            const sampleCount = Number(item[`${probeName}_sample_count`] || 0);
+            if (!sampleCount) return `${label}=N/E`;
+            const avgLatency = this.fmtLatency(item[`${probeName}_latency_avg`], 1);
+            const minLatency = this.fmtLatency(item[`${probeName}_latency_min`], 1);
+            const maxLatency = this.fmtLatency(item[`${probeName}_latency_max`], 1);
+            const jitter = this.fmtLatency(item[`${probeName}_latency_jitter`], 1);
+            const stable = item[`${probeName}_status_consistent`];
+            const stableLabel = stable === true ? 'stable' : (stable === false ? 'flap' : 'n/e');
+            return `${label}=${sampleCount}x ${stableLabel} [${minLatency}/${avgLatency}/${maxLatency}] j=${jitter}`;
         },
 
         renderAll() {
@@ -403,14 +496,15 @@
         },
 
         renderPhaseSummary() {
-            const det = dataManager.current.detailed_results;
-            const infra = Object.values(det.infrastructure || {});
-            const zones = det.zones || [];
-            const records = det.records || [];
+            const { filtered, active } = this.getFilterContext();
+            const infra = filtered.infrastructure;
+            const zones = filtered.zones;
+            const records = filtered.records;
+            const suffix = active ? ' (Filtered)' : '';
 
             const phaseCards = [
                 {
-                    title: 'Phase 1 Coverage',
+                    title: `Phase 1 Coverage${suffix}`,
                     metrics: [
                         { v: infra.length, l: 'Servers' },
                         { v: infra.filter(i => !i.is_dead).length, l: 'Alive' },
@@ -419,7 +513,7 @@
                     ]
                 },
                 {
-                    title: 'Phase 2 Coverage',
+                    title: `Phase 2 Coverage${suffix}`,
                     metrics: [
                         { v: new Set(zones.map(z => z.domain)).size, l: 'Domains' },
                         { v: zones.length, l: 'Checks' },
@@ -428,7 +522,7 @@
                     ]
                 },
                 {
-                    title: 'Phase 3 Coverage',
+                    title: `Phase 3 Coverage${suffix}`,
                     metrics: [
                         { v: records.length, l: 'Queries' },
                         { v: records.filter(r => r.status === 'NOERROR').length, l: 'OK' },
@@ -455,26 +549,34 @@
 
         renderHero() {
             const s = dataManager.current.summary;
-            const det = dataManager.current.detailed_results;
-            const infra = Object.values(det.infrastructure || {});
+            const { filtered, total, active } = this.getFilterContext();
+            const infra = filtered.infrastructure;
+            const zones = filtered.zones;
+            const records = filtered.records;
             const openResolvers = infra.filter(i => i.resolver_exposed === true).length;
-            const desync = det.zones.filter(z => z.zone_is_synced === false).length;
-            const divergences = det.records.filter(r => r.internally_consistent === 'DIV!').length;
+            const desync = zones.filter(z => z.zone_is_synced === false).length;
+            const divergences = records.filter(r => r.internally_consistent === 'DIV!').length;
             const criticalCount = openResolvers + desync + divergences;
             const grade = s.global_grade || 'N/A';
+            const filterLabel = active
+                ? `Filtered view active for "${this.filter}" across ${total} matching row(s). `
+                : '';
 
             document.getElementById('hero-section').style.display = 'grid';
             document.getElementById('action-board').style.display = 'grid';
             document.getElementById('hero-title').innerText =
-                criticalCount > 0
+                active && total === 0
+                    ? `No rows matched "${this.filter}"`
+                    : criticalCount > 0
                     ? `${criticalCount} signal(s) deserve immediate review`
                     : 'No critical indicators surfaced in this report';
             document.getElementById('hero-subtitle').innerText =
+                filterLabel +
                 `Dataset ${dataManager.current.metadata.arguments.domains} processed at ${new Date(s.timestamp).toLocaleString()}. ` +
                 `Use this view to separate connectivity noise from real DNS risk.`;
 
             const stats = [
-                { value: grade, label: this.help('Global Grade', 'Global Grade', 'Top-level grade derived from the available scores for this report.') },
+                { value: grade, label: this.help('Global Grade', 'Global Grade', 'Top-level grade derived from the available scores for this report. This card remains global even when a text filter is active.') },
                 { value: `${openResolvers}`, label: this.help('Open Resolvers', 'Open Resolvers', 'Count of servers classified as PUBLIC, meaning recursive exposure is visible.') },
                 { value: `${desync}`, label: this.help('Zone Desync', 'Zone Desync', 'Count of zone results where synchronization signals do not match across the tested servers.') },
                 { value: `${divergences}`, label: this.help('Divergent Answers', 'Divergent Answers', 'Count of repeated record checks that returned materially different answers.') }
@@ -518,9 +620,10 @@
         renderGlobal() {
             const s = dataManager.current.summary;
             const meta = dataManager.current.metadata;
+            const { active, total } = this.getFilterContext();
             const totalQueries = Math.max(s.total_queries || 0, 0);
             const successRate = totalQueries > 0 ? ((s.success_queries / totalQueries) * 100).toFixed(1) + '%' : 'N/A';
-            document.getElementById('sub-header').innerText = `Analysis: ${meta.arguments.domains} @ ${new Date(s.timestamp).toLocaleString()}`;
+            document.getElementById('sub-header').innerText = `Analysis: ${meta.arguments.domains} @ ${new Date(s.timestamp).toLocaleString()}${active ? ` | Filtered rows: ${total}` : ''}`;
             
             const metrics = [
                 {
@@ -563,34 +666,43 @@
         },
 
         renderRadar() {
-            const det = dataManager.current.detailed_results;
-            const infra = Object.values(det.infrastructure);
+            const { filtered, active } = this.getFilterContext();
+            const infra = filtered.infrastructure;
             
             const cards = [
                 {
+                    kind: 'danger',
                     label: this.help('Open Resolver', 'Open Resolver', 'A server appears as an open resolver when it answers a third-party recursive request from the public internet.'),
                     desc: 'Recursive exposure visible to the public internet.',
                     value: infra.filter(i => i.resolver_exposed === true).length
                 },
                 {
+                    kind: 'warning',
                     label: this.help('Zone Desync', 'Zone Desync', 'Zones where serial, authority, or NS-related synchronization signals differ across servers.'),
                     desc: 'Zones returning inconsistent serial or authority data.',
-                    value: det.zones.filter(z => !z.zone_is_synced).length
+                    value: filtered.zones.filter(z => !z.zone_is_synced).length
                 },
                 {
+                    kind: 'warning',
                     label: this.help('Lame Delegation', 'Lame Delegation', 'Authoritative infrastructure that does not return the expected AA flag or behaves inconsistently as authority.'),
                     desc: 'Authoritative responses without AA where it should exist.',
-                    value: det.zones.filter(z => !z.aa && z.status === 'NOERROR').length
+                    value: filtered.zones.filter(z => !z.aa && z.status === 'NOERROR').length
                 },
                 {
+                    kind: 'warning',
                     label: this.help('Divergence', 'Divergence', 'Repeated queries returned different answers during the same execution.'),
                     desc: 'Sequential queries returned materially different answers.',
-                    value: det.records.filter(r => r.internally_consistent === 'DIV!').length
+                    value: filtered.records.filter(r => r.internally_consistent === 'DIV!').length
                 }
             ];
 
+            if (active && cards.every(card => card.value === 0)) {
+                document.getElementById('incident-radar').innerHTML = `<div class="chart-empty" style="grid-column:1 / -1">No priority incidents match the active filter.</div>`;
+                return;
+            }
+
             document.getElementById('incident-radar').innerHTML = cards.map(card => {
-                const cls = card.value > 0 ? (card.label === 'Open Resolver' ? 'danger' : 'warning') : 'safe';
+                const cls = card.value > 0 ? card.kind : 'safe';
                 return `
                     <div class="incident-card ${cls}">
                         <div class="count">${card.value}</div>
@@ -601,8 +713,8 @@
         },
 
         renderActionSummary() {
-            const det = dataManager.current.detailed_results;
-            const infra = Object.values(det.infrastructure);
+            const { filtered, active, total } = this.getFilterContext();
+            const infra = filtered.infrastructure;
             const actions = [];
 
             const exposedResolvers = infra.filter(i => i.resolver_exposed === true);
@@ -614,7 +726,7 @@
                 });
             }
 
-            const desyncedZones = det.zones.filter(z => z.zone_is_synced === false);
+            const desyncedZones = filtered.zones.filter(z => z.zone_is_synced === false);
             if (desyncedZones.length) {
                 actions.push({
                     cls: 'attention',
@@ -623,7 +735,7 @@
                 });
             }
 
-            const soaOnly = det.zones.filter(z => z.check_scope === 'SOA_ONLY');
+            const soaOnly = filtered.zones.filter(z => z.check_scope === 'SOA_ONLY');
             if (soaOnly.length) {
                 actions.push({
                     cls: 'attention',
@@ -632,7 +744,7 @@
                 });
             }
 
-            const findings = det.records.filter(r => (r.findings || []).length > 0);
+            const findings = filtered.records.filter(r => (r.findings || []).length > 0);
             if (findings.length) {
                 actions.push({
                     cls: 'attention',
@@ -644,8 +756,10 @@
             if (!actions.length) {
                 actions.push({
                     cls: 'good',
-                    title: 'No immediate critical issue',
-                    body: 'The current run did not surface high-priority incidents. Use the detailed tables for a deeper audit.'
+                    title: active && total === 0 ? `No rows matched "${this.filter}"` : 'No immediate critical issue',
+                    body: active && total === 0
+                        ? 'Try another search term or clear the filter to return to the full operational picture.'
+                        : 'The current run did not surface high-priority incidents in this view. Use the detailed tables for a deeper audit.'
                 });
             }
 
@@ -660,7 +774,7 @@
             `).join('');
         },
 
-        applyFilter(v) { this.filter = v.toLowerCase(); this.renderDetails(); },
+        applyFilter(v) { this.filter = v.toLowerCase(); this.renderAll(); },
         getClr(s) { return s >= 90 ? 'var(--success)' : (s >= 70 ? 'var(--warning)' : 'var(--danger)'); },
         highlight(t) { return this.filter ? String(t).replace(new RegExp(`(${this.filter})`, 'gi'), '<span class="text-match">$1</span>') : t; },
 
@@ -672,14 +786,15 @@
 
         renderP1() {
             const data = Object.entries(dataManager.current.detailed_results.infrastructure).map(([ip, d]) => ({ ip, ...d }));
-            const filtered = data.filter(d => JSON.stringify(d).toLowerCase().includes(this.filter));
+            const filtered = data.filter(d => this.matchesFilter(d));
             
             const insights = dataManager.current.analytics.phase1_infrastructure || {};
+            const p1CompactKeys = ['Network Health', 'Transport Consistency', 'Control Plane Health', 'Observability Quality'];
             document.getElementById('p1-analytics').innerHTML = [
-                `<div style="font-size:10px">Servers: <b>${data.length}</b></div>`,
-                `<div style="font-size:10px">Alive: <b>${data.filter(d => !d.is_dead).length}</b></div>`,
-                `<div style="font-size:10px">Dead: <b>${data.filter(d => d.is_dead).length}</b></div>`,
-                ...Object.entries(insights).slice(0, 2).map(([k,v]) => `<div style="font-size:10px">${k}: <b>${v}</b></div>`)
+                `<div style="font-size:10px">Servers: <b>${filtered.length}</b></div>`,
+                `<div style="font-size:10px">Alive: <b>${filtered.filter(d => !d.is_dead).length}</b></div>`,
+                `<div style="font-size:10px">Dead: <b>${filtered.filter(d => d.is_dead).length}</b></div>`,
+                ...p1CompactKeys.filter(key => key in insights).map(key => `<div style="font-size:10px">${key}: <b>${insights[key]}</b></div>`)
             ].join('');
 
             let html = `<table><thead><tr>
@@ -710,7 +825,7 @@
                     <td>${this.highlight(d.groups)}</td>
                     <td>${this.highlight(d.ip)}</td>
                     <td>${d.server_profile || '-'}</td>
-                    <td>${d.latency.toFixed(0)}ms</td>
+                    <td>${this.fmtLatency(d.latency, 0)}</td>
                     <td><span class="badge ${d.port53u_serv==='OK'?'badge-success':'badge-danger'}">${d.port53u_serv}</span></td>
                     <td><span class="badge ${d.port53t_serv==='OK'?'badge-success':'badge-danger'}">${d.port53t_serv}</span></td>
                     <td>${d.dot}</td><td>${d.doh}</td>
@@ -722,24 +837,40 @@
                 html += `<tr class="detail-row"><td colspan="12">
                     Version: ${this.highlight(d.version || '-')} |
                     Open Resolver Raw: ${this.highlight(d.open_resolver || '-')} |
-                    Latency Range: ${this.highlight(`${d.latency_min || 0}ms .. ${d.latency_max || 0}ms`)} |
-                    Confidence: ${d.confidence || '-'}
+                    Ping Range: ${this.highlight(`${this.fmtLatency(d.latency_min, 0)} .. ${this.fmtLatency(d.latency_max, 0)}`)} |
+                    UDP53 Probe: ${this.highlight(this.fmtLatency(d.udp53_probe_lat, 0))} |
+                    TCP53 Conn/Probe: ${this.highlight(`${this.fmtLatency(d.port53t_conn_lat, 0)} / ${this.fmtLatency(d.port53t_probe_lat, 0)}`)} |
+                    Version/Recursion: ${this.highlight(`${this.fmtLatency(d.version_lat, 0)} / ${this.fmtLatency(d.recursion_lat, 0)}`)} |
+                    DoT Conn/Probe: ${this.highlight(`${this.fmtLatency(d.port853_conn_lat, 0)} / ${this.fmtLatency(d.dot_lat, 0)}`)} |
+                    DoH Conn/Probe: ${this.highlight(`${this.fmtLatency(d.port443_conn_lat, 0)} / ${this.fmtLatency(d.doh_lat, 0)}`)} |
+                    DNSSEC/EDNS0/ECS/QNAME/Cookies/WebRisk/OpenRes: ${this.highlight(`${this.fmtLatency(d.dnssec_lat, 0)} / ${this.fmtLatency(d.edns0_lat, 0)} / ${this.fmtLatency(d.ecs_lat, 0)} / ${this.fmtLatency(d.qname_min_lat, 0)} / ${this.fmtLatency(d.cookies_lat, 0)} / ${this.fmtLatency(d.web_risk_lat, 0)} / ${this.fmtLatency(d.open_resolver_lat, 0)}`)} |
+                    Probe Avg: ${this.highlight(this.fmtLatency(d.probe_latency_avg, 1))} |
+                    Coverage: ${this.highlight(`${d.probe_coverage_ratio ?? 'N/A'}%`)} |
+                    Confidence: ${d.confidence || '-'} |
+                    Obs UDP53/TCP53/ECS/QNAME/Cookies: ${this.highlight(`${d.udp53_probe_timing_source || '-'}:${d.udp53_probe_failure_reason || '-'} / ${d.tcp53_probe_timing_source || '-'}:${d.tcp53_probe_failure_reason || '-'} / ${d.ecs_timing_source || '-'}:${d.ecs_failure_reason || '-'} / ${d.qname_min_timing_source || '-'}:${d.qname_min_failure_reason || '-'} / ${d.cookies_timing_source || '-'}:${d.cookies_failure_reason || '-'}`)} |
+                    Web80/Web443: ${this.highlight(`${(d.web_risk_status && d.web_risk_status['80']) || (d.web_risk_status && d.web_risk_status[80]) || '-'} / ${(d.web_risk_status && d.web_risk_status['443']) || (d.web_risk_status && d.web_risk_status[443]) || '-'}`)} |
+                    Evidence: ${this.highlight(`${this.fmtProbeEvidence(d, 'version', 'Version')} / ${this.fmtProbeEvidence(d, 'recursion', 'Recursion')} / ${this.fmtProbeEvidence(d, 'dnssec', 'DNSSEC')} / ${this.fmtProbeEvidence(d, 'edns0', 'EDNS0')} / ${this.fmtProbeEvidence(d, 'open_resolver', 'OpenRes')} / ${this.fmtProbeEvidence(d, 'doh_probe', 'DoH')}`)} |
+                    Repeatability: ${this.highlight(`${this.fmtProbeRepeat(d, 'udp53_probe', 'UDP53')} / ${this.fmtProbeRepeat(d, 'tcp53_probe', 'TCP53')} / ${this.fmtProbeRepeat(d, 'dot_probe', 'DoT')} / ${this.fmtProbeRepeat(d, 'doh_probe', 'DoH')} / ${this.fmtProbeRepeat(d, 'open_resolver', 'OpenRes')}`)}
                 </td></tr>`;
             });
+            if (!filtered.length) {
+                html += this.renderEmptyTable(12, this.filter ? `No infrastructure rows match "${this.filter}".` : 'No infrastructure rows available.');
+            }
             document.getElementById('p1-content').innerHTML = html + '</tbody></table>';
         },
 
         renderP2() {
             const data = dataManager.current.detailed_results.zones;
-            const filtered = data.filter(d => JSON.stringify(d).toLowerCase().includes(this.filter));
+            const filtered = data.filter(d => this.matchesFilter(d));
             
             const insights = dataManager.current.analytics.phase2_zones || {};
+            const p2CompactKeys = ['Zone Response Health', 'Authority Integrity', 'Transfer Exposure Posture', 'Zone Hygiene'];
             document.getElementById('p2-analytics').innerHTML = [
-                `<div style="font-size:10px">Domains: <b>${new Set(data.map(d => d.domain)).size}</b></div>`,
-                `<div style="font-size:10px">Checks: <b>${data.length}</b></div>`,
-                `<div style="font-size:10px">Full: <b>${data.filter(d => d.check_scope === 'FULL').length}</b></div>`,
-                `<div style="font-size:10px">SOA Only: <b>${data.filter(d => d.check_scope === 'SOA_ONLY').length}</b></div>`,
-                ...Object.entries(insights).slice(0, 1).map(([k,v]) => `<div style="font-size:10px">${k}: <b>${v}</b></div>`)
+                `<div style="font-size:10px">Domains: <b>${new Set(filtered.map(d => d.domain)).size}</b></div>`,
+                `<div style="font-size:10px">Checks: <b>${filtered.length}</b></div>`,
+                `<div style="font-size:10px">Full: <b>${filtered.filter(d => d.check_scope === 'FULL').length}</b></div>`,
+                `<div style="font-size:10px">SOA Only: <b>${filtered.filter(d => d.check_scope === 'SOA_ONLY').length}</b></div>`,
+                ...p2CompactKeys.filter(key => key in insights).map(key => `<div style="font-size:10px">${key}: <b>${insights[key]}</b></div>`)
             ].join('');
 
             let html = `<table><thead><tr>
@@ -760,12 +891,12 @@
             </tr></thead><tbody>`;
             filtered.forEach(d => {
                 html += `<tr class="${!d.zone_is_synced ? 'anomaly-row' : ''}">
-                    <td>${this.highlight(d.domain)}</td><td>${this.highlight(d.group || '-')}</td><td>${this.highlight(d.server)}</td><td>${d.status}</td><td>${d.serial}</td><td>${d.latency}ms</td>
+                    <td>${this.highlight(d.domain)}</td><td>${this.highlight(d.group || '-')}</td><td>${this.highlight(d.server)}</td><td>${d.status}</td><td>${d.serial}</td><td>${this.fmtLatency(d.latency, 0)}</td>
                     <td style="color:${this.getClr(d.zone_score)}">${d.zone_score}</td>
                     <td>${d.aa?'OK':'--'}</td><td>${d.axfr_detail}</td><td>${d.check_scope || '-'}</td>
                     <td>${d.dnssec === true ? 'SIGNED' : (d.dnssec === false ? 'UNSIGNED' : 'N/E')}</td>
                     <td>${d.caa_records ? d.caa_records.length : 0}</td>
-                    <td>${d.ns_consistent === false ? 'NO' : 'YES'}</td>
+                    <td>${d.ns_consistent === true ? 'YES' : (d.ns_consistent === false ? 'NO' : 'N/E')}</td>
                     <td>${d.web_risks && d.web_risks.length ? d.web_risks.join(', ') : 'None'}</td>
                 </tr>`;
                 if (d.caa_records && d.caa_records.length > 0) {
@@ -774,7 +905,11 @@
                         RNAME: ${this.highlight(d.rname || '-')} |
                         Zone Audit MNAME Reachability: ${this.highlight((d.zone_audit && d.zone_audit.mname_reachable) || '-')} |
                         Timer Issues: ${this.highlight((d.zone_audit && d.zone_audit.timers_issues && d.zone_audit.timers_issues.length) ? d.zone_audit.timers_issues.join(' | ') : 'None')} |
-                        CAA Records: ${this.highlight(d.caa_records.join(' | '))}
+                        CAA Records: ${this.highlight(d.caa_records.join(' | '))} |
+                        Timings SOA/Fallback/NS/AXFR/CAA/DNSSEC: ${this.highlight(`${this.fmtLatency(d.soa_latency, 0)} / ${this.fmtLatency(d.soa_fallback_latency, 0)} / ${this.fmtLatency(d.ns_latency, 0)} / ${this.fmtLatency(d.axfr_latency, 0)} / ${this.fmtLatency(d.caa_latency, 0)} / ${this.fmtLatency(d.zone_dnssec_latency, 0)}`)} |
+                        Scope: ${this.highlight(`${d.scope_confidence || 'N/A'} / fallback:${d.used_fallback ? 'YES' : 'NO'}`)} |
+                        Evidence: ${this.highlight(`${this.fmtProbeEvidence(d, 'soa', 'SOA')} / ${this.fmtProbeEvidence(d, 'ns', 'NS')} / ${this.fmtProbeEvidence(d, 'caa', 'CAA')} / ${this.fmtProbeEvidence(d, 'zone_dnssec', 'ZoneDNSSEC')}`)} |
+                        Repeatability: ${this.highlight(`${this.fmtProbeRepeat(d, 'soa', 'SOA')} / ${this.fmtProbeRepeat(d, 'ns', 'NS')}`)}
                     </td></tr>`;
                 }
                 else {
@@ -782,23 +917,30 @@
                         MNAME: ${this.highlight(d.mname || '-')} |
                         RNAME: ${this.highlight(d.rname || '-')} |
                         Zone Audit MNAME Reachability: ${this.highlight((d.zone_audit && d.zone_audit.mname_reachable) || '-')} |
-                        Timer Issues: ${this.highlight((d.zone_audit && d.zone_audit.timers_issues && d.zone_audit.timers_issues.length) ? d.zone_audit.timers_issues.join(' | ') : 'None')}
+                        Timer Issues: ${this.highlight((d.zone_audit && d.zone_audit.timers_issues && d.zone_audit.timers_issues.length) ? d.zone_audit.timers_issues.join(' | ') : 'None')} |
+                        Timings SOA/Fallback/NS/AXFR/CAA/DNSSEC: ${this.highlight(`${this.fmtLatency(d.soa_latency, 0)} / ${this.fmtLatency(d.soa_fallback_latency, 0)} / ${this.fmtLatency(d.ns_latency, 0)} / ${this.fmtLatency(d.axfr_latency, 0)} / ${this.fmtLatency(d.caa_latency, 0)} / ${this.fmtLatency(d.zone_dnssec_latency, 0)}`)} |
+                        Scope: ${this.highlight(`${d.scope_confidence || 'N/A'} / fallback:${d.used_fallback ? 'YES' : 'NO'}`)} |
+                        Evidence: ${this.highlight(`${this.fmtProbeEvidence(d, 'soa', 'SOA')} / ${this.fmtProbeEvidence(d, 'ns', 'NS')} / ${this.fmtProbeEvidence(d, 'caa', 'CAA')} / ${this.fmtProbeEvidence(d, 'zone_dnssec', 'ZoneDNSSEC')}`)} |
+                        Repeatability: ${this.highlight(`${this.fmtProbeRepeat(d, 'soa', 'SOA')} / ${this.fmtProbeRepeat(d, 'ns', 'NS')}`)}
                     </td></tr>`;
                 }
             });
+            if (!filtered.length) {
+                html += this.renderEmptyTable(14, this.filter ? `No zone rows match "${this.filter}".` : 'No zone rows available.');
+            }
             document.getElementById('p2-content').innerHTML = html + '</tbody></table>';
         },
 
         renderP3() {
             const data = dataManager.current.detailed_results.records;
-            const filtered = data.filter(d => JSON.stringify(d).toLowerCase().includes(this.filter));
+            const filtered = data.filter(d => this.matchesFilter(d));
             
             const insights = dataManager.current.analytics.phase3_records || {};
             document.getElementById('p3-analytics').innerHTML = [
-                `<div style="font-size:10px">Queries: <b>${data.length}</b></div>`,
-                `<div style="font-size:10px">OK: <b>${data.filter(d => d.status === 'NOERROR').length}</b></div>`,
-                `<div style="font-size:10px">DIV: <b>${data.filter(d => d.internally_consistent === 'DIV!').length}</b></div>`,
-                `<div style="font-size:10px">Findings: <b>${data.filter(d => (d.findings || []).length > 0).length}</b></div>`,
+                `<div style="font-size:10px">Queries: <b>${filtered.length}</b></div>`,
+                `<div style="font-size:10px">OK: <b>${filtered.filter(d => d.status === 'NOERROR').length}</b></div>`,
+                `<div style="font-size:10px">DIV: <b>${filtered.filter(d => d.internally_consistent === 'DIV!').length}</b></div>`,
+                `<div style="font-size:10px">Findings: <b>${filtered.filter(d => (d.findings || []).length > 0).length}</b></div>`,
                 ...Object.entries(insights).slice(0, 1).map(([k,v]) => `<div style="font-size:10px">${k}: <b>${v}</b></div>`)
             ].join('');
 
@@ -821,12 +963,14 @@
                 html += `<tr class="${d.internally_consistent==='DIV!'?'anomaly-row':''}">
                     <td>${this.highlight(d.domain)}</td><td>${this.highlight(d.group || '-')}</td><td>${this.highlight(d.server)}</td><td>${d.type}</td>
                     <td><span class="badge ${d.status==='NOERROR'?'badge-success':'badge-danger'}">${d.status}</span></td>
-                    <td>${d.latency.toFixed(1)}ms</td><td>${d.internally_consistent}</td>
+                    <td>${this.fmtLatency(d.latency, 1)}</td><td>${d.internally_consistent}</td>
                     <td>${d.ping || '-'}</td><td>${d.recursion || '-'}</td><td>${d.dot || '-'}</td><td>${d.doh || '-'}</td><td>${d.nsid || '-'}</td><td>${d.wildcard_detected ? 'YES' : 'NO'}</td>
                 </tr>`;
                 html += `<tr class="detail-row"><td colspan="13">
                     Answers: ${this.highlight(d.answers || '-')} |
-                    Wildcard Answers: ${this.highlight((d.wildcard_answers && d.wildcard_answers.length) ? d.wildcard_answers.join(' | ') : '-')}
+                    Wildcard Answers: ${this.highlight((d.wildcard_answers && d.wildcard_answers.length) ? d.wildcard_answers.join(' | ') : '-')} |
+                    Timings First/Avg/Min/Max: ${this.highlight(`${this.fmtLatency(d.latency_first, 1)} / ${this.fmtLatency(d.latency_avg, 1)} / ${this.fmtLatency(d.latency_min, 1)} / ${this.fmtLatency(d.latency_max, 1)}`)} |
+                    Chain/MX25/Wildcard: ${this.highlight(`${this.fmtLatency(d.chain_latency, 1)} / ${this.fmtLatency(d.mx_port25_latency, 1)} / ${this.fmtLatency(d.wildcard_latency, 1)}`)}
                 </td></tr>`;
                 if (d.findings && d.findings.length > 0) {
                     html += `<tr class="detail-row"><td colspan="13">
@@ -834,6 +978,9 @@
                     </td></tr>`;
                 }
             });
+            if (!filtered.length) {
+                html += this.renderEmptyTable(13, this.filter ? `No record rows match "${this.filter}".` : 'No record rows available.');
+            }
             document.getElementById('p3-content').innerHTML = html + '</tbody></table>';
         }
     };

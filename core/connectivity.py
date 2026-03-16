@@ -17,7 +17,7 @@ class Connectivity:
                 latency = (time.time() - start) * 1000
                 return True, latency
         except (socket.timeout, ConnectionRefusedError, socket.error):
-            return False, 0
+            return False, None
 
     def ping(self, host, count=3):
         """Cross-platform ping using icmplib (best) or system ping (fallback)."""
@@ -47,12 +47,15 @@ class Connectivity:
             # Simple heuristic for success
             is_alive = "ttl=" in output.lower() or "time=" in output.lower()
             return {
-                "avg_rtt": (end_time - start_time) * 1000 / count if is_alive else 0,
+                "avg_rtt": (end_time - start_time) * 1000 / count if is_alive else None,
+                "min_rtt": None,
+                "max_rtt": None,
+                "packet_loss": 0.0 if is_alive else 1.0,
                 "is_alive": is_alive,
                 "fallback": True
             }
         except:
-            return {"is_alive": False, "fallback": True}
+            return {"avg_rtt": None, "min_rtt": None, "max_rtt": None, "packet_loss": 1.0, "is_alive": False, "fallback": True}
 
     def traceroute(self, host, max_hops=30):
         """Simple traceroute implementation (or system call)."""

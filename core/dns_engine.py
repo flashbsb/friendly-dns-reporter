@@ -21,6 +21,7 @@ class DNSEngine:
             try:
                 # Prepare message
                 query = dns.message.make_query(domain, record_type)
+                query_size = len(query.to_wire())
                 
                 # Recursion Desired (RD) - default True
                 if not rd: query.flags &= ~dns.flags.RD
@@ -74,9 +75,14 @@ class DNSEngine:
                 return {
                     "status": status,
                     "latency": latency,
+                    "protocol": "udp",
+                    "query_size": query_size,
+                    "response_size": len(response.to_wire()),
                     "flags": dns.flags.to_text(response.flags).split(),
                     "aa": bool(response.flags & dns.flags.AA),
                     "tc": bool(response.flags & dns.flags.TC), # Truncated
+                    "answer_count": sum(len(rrset) for rrset in response.answer) if response.answer else 0,
+                    "authority_count": sum(len(rrset) for rrset in response.authority) if response.authority else 0,
                     "answers": answers,
                     "authority": authority,
                     "nsid": nsid,
@@ -87,18 +93,37 @@ class DNSEngine:
                 last_exception = e
                 continue # Retry
             except Exception as e:
-                return {"status": f"ERROR: {str(e)}", "latency": 0, "answers": [], "authority": []}
+                return {"status": f"ERROR: {str(e)}", "latency": None, "answers": [], "authority": [], "protocol": "udp"}
         
-        return {"status": "TIMEOUT", "latency": self.timeout * 1000, "answers": [], "authority": []}
+        return {"status": "TIMEOUT", "latency": self.timeout * 1000, "answers": [], "authority": [], "protocol": "udp"}
+
+    def _response_meta(self, response, protocol="udp", extra=None):
+        meta = {
+            "protocol": protocol,
+            "rcode": dns.rcode.to_text(response.rcode()),
+            "flags": dns.flags.to_text(response.flags).split(),
+            "response_size": len(response.to_wire()) if response else None,
+            "authority_count": sum(len(rrset) for rrset in response.authority) if response and response.authority else 0,
+            "answer_count": sum(len(rrset) for rrset in response.answer) if response and response.answer else 0,
+            "aa": bool(response.flags & dns.flags.AA) if response else None,
+            "tc": bool(response.flags & dns.flags.TC) if response else None,
+        }
+        if extra:
+            meta.update(extra)
+        return meta
 
     def check_axfr(self, server, zone):
         """Check if Zone Transfer (AXFR) is allowed."""
+        start = time.time()
         try:
             # AXFR usually requires TCP
             z = dns.zone.from_xfr(dns.query.xfr(server, zone, timeout=self.timeout))
-            return True, f"VULNERABLE: {len(z.nodes)} nodes leaked"
+            latency = (time.time() - start) * 1000
+            return True, f"VULNERABLE: {len(z.nodes)} nodes leaked", latency
+        except dns.exception.Timeout:
+            return False, "TIMEOUT", self.timeout * 1000
         except Exception as e:
-            return False, str(e)
+            return False, str(e), None
 
     def check_dnssec(self, server):
         """Check whether a server returns DNSSEC data. This is not a validation test."""
@@ -106,18 +131,19 @@ class DNSEngine:
         try:
             # We query the root zone (.) to be independent of user domains
             query = dns.message.make_query(".", "DNSKEY", want_dnssec=True)
+            query_size = len(query.to_wire())
             response = dns.query.udp(query, server, timeout=self.timeout)
             latency = (time.time() - start) * 1000
             
             has_dnskey = any(rrset.rdtype == dns.rdatatype.DNSKEY for rrset in response.answer)
             has_rrsig = any(rrset.rdtype == dns.rdatatype.RRSIG for rrset in response.answer)
             if has_dnskey and has_rrsig:
-                return True, latency
-            return False, latency
+                return True, latency, self._response_meta(response, extra={"query_type": "DNSKEY", "want_dnssec": True, "query_size": query_size})
+            return False, latency, self._response_meta(response, extra={"query_type": "DNSKEY", "want_dnssec": True, "query_size": query_size})
         except dns.exception.Timeout:
-            return None, self.timeout * 1000
+            return None, self.timeout * 1000, {"protocol": "udp", "failure_reason": "timeout"}
         except:
-            return False, 0
+            return False, None, {"protocol": "udp", "failure_reason": "error"}
 
     def check_open_resolver(self, server):
         """Check if server appears to provide public recursion using third-party recursion."""
@@ -125,6 +151,7 @@ class DNSEngine:
         try:
             # A public recursion test must request recursion.
             query = dns.message.make_query("google.com", "A")
+            query_size = len(query.to_wire())
             response = dns.query.udp(query, server, timeout=self.timeout)
             latency = (time.time() - start) * 1000
 
@@ -132,23 +159,23 @@ class DNSEngine:
             recursion_available = bool(response.flags & dns.flags.RA)
 
             if recursion_available and rcode in (dns.rcode.NOERROR, dns.rcode.NXDOMAIN):
-                return "OPEN", latency
+                return "OPEN", latency, self._response_meta(response, extra={"ra": recursion_available, "query_size": query_size})
 
             if rcode == dns.rcode.REFUSED:
-                return "REFUSED", latency
+                return "REFUSED", latency, self._response_meta(response, extra={"ra": recursion_available, "query_size": query_size})
 
             if not recursion_available:
-                return "NO_RECURSION", latency
+                return "NO_RECURSION", latency, self._response_meta(response, extra={"ra": recursion_available, "query_size": query_size})
 
             if rcode == dns.rcode.SERVFAIL:
-                return "SERVFAIL", latency
+                return "SERVFAIL", latency, self._response_meta(response, extra={"ra": recursion_available, "query_size": query_size})
 
-            return dns.rcode.to_text(rcode), latency
+            return dns.rcode.to_text(rcode), latency, self._response_meta(response, extra={"ra": recursion_available, "query_size": query_size})
                 
         except dns.exception.Timeout:
-            return "TIMEOUT", self.timeout * 1000
+            return "TIMEOUT", self.timeout * 1000, {"protocol": "udp", "failure_reason": "timeout"}
         except:
-            return "ERROR", 0
+            return "ERROR", None, {"protocol": "udp", "failure_reason": "error"}
 
     def check_edns0(self, server):
         """Check if server supports EDNS0 and large UDP payloads. Returns (True/False/None, latency)."""
@@ -157,58 +184,63 @@ class DNSEngine:
             query = dns.message.make_query("google.com", "A")
             # Request a 4096 buffer size
             query.use_edns(edns=0, payload=4096)
+            query_size = len(query.to_wire())
             response = dns.query.udp(query, server, timeout=self.timeout)
             latency = (time.time() - start) * 1000
             
             # Check if response retains EDNS0
             if response.edns == 0:
-                return True, latency
-            return False, latency
+                return True, latency, self._response_meta(response, extra={"edns": response.edns, "payload": 4096, "query_size": query_size})
+            return False, latency, self._response_meta(response, extra={"edns": response.edns, "payload": 4096, "query_size": query_size})
         except dns.exception.Timeout:
-            return None, self.timeout * 1000
+            return None, self.timeout * 1000, {"protocol": "udp", "failure_reason": "timeout"}
         except:
-            return False, 0
+            return False, None, {"protocol": "udp", "failure_reason": "error"}
 
     def check_recursion(self, server):
         """Check if recursion is available. Returns (True/False/None, latency)."""
         start = time.time()
         try:
             query = dns.message.make_query("google.com", "A")
+            query_size = len(query.to_wire())
             response = dns.query.udp(query, server, timeout=self.timeout)
             latency = (time.time() - start) * 1000
-            return bool(response.flags & dns.flags.RA), latency
+            recursion_available = bool(response.flags & dns.flags.RA)
+            return recursion_available, latency, self._response_meta(response, extra={"ra": recursion_available, "query_size": query_size})
         except dns.exception.Timeout:
-            return None, self.timeout * 1000
+            return None, self.timeout * 1000, {"protocol": "udp", "failure_reason": "timeout"}
         except:
-            return False, 0
+            return False, None, {"protocol": "udp", "failure_reason": "error"}
 
     def query_version(self, server):
         """Query the BIND version. Returns (string/HIDDEN/None, latency)."""
         start = time.time()
         try:
             query = dns.message.make_query("version.bind", "TXT", rdclass=dns.rclass.CH)
+            query_size = len(query.to_wire())
             response = dns.query.udp(query, server, timeout=self.timeout)
             latency = (time.time() - start) * 1000
             if response.answer:
-                return response.answer[0][0].to_text().strip('"'), latency
-            return "HIDDEN", latency
+                return response.answer[0][0].to_text().strip('"'), latency, self._response_meta(response, extra={"query_class": "CH", "query_name": "version.bind", "query_size": query_size})
+            return "HIDDEN", latency, self._response_meta(response, extra={"query_class": "CH", "query_name": "version.bind", "query_size": query_size})
         except dns.exception.Timeout:
-            return None, self.timeout * 1000
+            return None, self.timeout * 1000, {"protocol": "udp", "failure_reason": "timeout", "query_class": "CH"}
         except:
-            return "HIDDEN", 0
+            return "HIDDEN", None, {"protocol": "udp", "failure_reason": "error", "query_class": "CH"}
 
     def check_dot(self, server):
         """Check if server supports DoT. Returns (StatusString, latency)."""
         start = time.time()
         try:
             query = dns.message.make_query("google.com", "A")
-            dns.query.tls(query, server, timeout=self.timeout)
+            query_size = len(query.to_wire())
+            response = dns.query.tls(query, server, timeout=self.timeout)
             latency = (time.time() - start) * 1000
-            return "OK", latency
+            return "OK", latency, self._response_meta(response, protocol="tls", extra={"port": 853, "query_size": query_size})
         except dns.exception.Timeout:
-            return "TIMEOUT", self.timeout * 1000
+            return "TIMEOUT", self.timeout * 1000, {"protocol": "tls", "port": 853, "failure_reason": "timeout"}
         except:
-            return "FAIL", 0
+            return "FAIL", None, {"protocol": "tls", "port": 853, "failure_reason": "error"}
 
     def check_doh(self, server):
         """Check if server supports DoH. Returns (StatusString, latency)."""
@@ -223,38 +255,63 @@ class DNSEngine:
             response = requests.post(url, data=wire_query, headers=headers, timeout=self.timeout, verify=False)
             latency = (time.time() - start) * 1000
             if response.status_code == 200:
-                return "OK", latency
-            return "FAIL", 0
+                try:
+                    dns_response = dns.message.from_wire(response.content)
+                    meta = self._response_meta(dns_response, protocol="https", extra={"port": 443, "http_status": response.status_code, "query_size": len(wire_query)})
+                except Exception:
+                    meta = {"protocol": "https", "port": 443, "http_status": response.status_code, "response_size": len(response.content), "query_size": len(wire_query)}
+                return "OK", latency, meta
+            return "FAIL", latency, {"protocol": "https", "port": 443, "http_status": response.status_code, "response_size": len(response.content), "query_size": len(wire_query)}
         except requests.exceptions.Timeout:
-            return "TIMEOUT", self.timeout * 1000
+            return "TIMEOUT", self.timeout * 1000, {"protocol": "https", "port": 443, "failure_reason": "timeout"}
         except:
-            return "FAIL", 0
+            return "FAIL", None, {"protocol": "https", "port": 443, "failure_reason": "error"}
 
     def check_tcp(self, server):
         """Perform a real DNS query over TCP. Returns (StatusString, latency)."""
         start = time.time()
         try:
             query = dns.message.make_query("google.com", "A")
-            dns.query.tcp(query, server, timeout=self.timeout)
+            query_size = len(query.to_wire())
+            response = dns.query.tcp(query, server, timeout=self.timeout)
             latency = (time.time() - start) * 1000
-            return "OK", latency
+            return "OK", latency, self._response_meta(response, protocol="tcp", extra={"port": 53, "query_size": query_size})
         except dns.exception.Timeout:
-            return "TIMEOUT", self.timeout * 1000
+            return "TIMEOUT", self.timeout * 1000, {"protocol": "tcp", "port": 53, "failure_reason": "timeout"}
         except:
-            return "FAIL", 0
+            return "FAIL", None, {"protocol": "tcp", "port": 53, "failure_reason": "error"}
+
+    def check_udp(self, server):
+        """Perform a direct DNS query over UDP to measure DNS service responsiveness."""
+        start = time.time()
+        try:
+            query = dns.message.make_query("google.com", "A")
+            query_size = len(query.to_wire())
+            response = dns.query.udp(query, server, timeout=self.timeout)
+            latency = (time.time() - start) * 1000
+            return "OK", latency, self._response_meta(response, protocol="udp", extra={"port": 53, "query_size": query_size})
+        except dns.exception.Timeout:
+            return "TIMEOUT", self.timeout * 1000, {"protocol": "udp", "port": 53, "failure_reason": "timeout"}
+        except:
+            return "FAIL", None, {"protocol": "udp", "port": 53, "failure_reason": "error"}
 
     def check_zone_dnssec(self, server, domain):
         """Verify if a specific zone is signed (contains DNSKEY and RRSIG)."""
+        start = time.time()
         try:
             query = dns.message.make_query(domain, "DNSKEY", want_dnssec=True)
+            query_size = len(query.to_wire())
             response = dns.query.udp(query, server, timeout=self.timeout)
+            latency = (time.time() - start) * 1000
             
             has_dnskey = any(rrset.rdtype == dns.rdatatype.DNSKEY for rrset in response.answer)
             has_rrsig = any(rrset.rdtype == dns.rdatatype.RRSIG for rrset in response.answer)
             
-            return has_dnskey and has_rrsig
+            return has_dnskey and has_rrsig, latency, self._response_meta(response, extra={"query_type": "DNSKEY", "want_dnssec": True, "query_size": query_size})
+        except dns.exception.Timeout:
+            return None, self.timeout * 1000, {"protocol": "udp", "failure_reason": "timeout"}
         except:
-            return False
+            return False, None, {"protocol": "udp", "failure_reason": "error"}
 
     def analyze_soa_timers(self, refresh, retry, expire, minimum):
         """Validate SOA timers against RFC 1912 best practices."""
@@ -276,40 +333,49 @@ class DNSEngine:
     def check_web_risk(self, server):
         """Check if ports 80 or 443 are open on the DNS server (Web Exposure Risk)."""
         risks = []
+        timings = {}
         for port in [80, 443]:
+            start = time.time()
             try:
                 with socket.create_connection((server, port), timeout=1.0):
                     risks.append(port)
+                    timings[port] = (time.time() - start) * 1000
             except:
+                timings[port] = None
                 continue
-        return risks
+        return risks, timings
 
     def resolve_chain(self, server, target, rtype, rd=True):
         """Verify if a CNAME or MX target actually resolves to an IP (Dangling DNS check)."""
         try:
             # Check for both IPv4 and IPv6 resolution
             has_ip = False
+            latencies = []
             for family in ["A", "AAAA"]:
                 res = self.query(server, target, family, rd=rd)
+                if res.get("latency"):
+                    latencies.append(res["latency"])
                 if res['status'] == "NOERROR" and res['answers']:
                     has_ip = True
                     break
                 if res['status'] == "NXDOMAIN":
-                    return False, "NXDOMAIN (Dangling!)"
+                    return False, "NXDOMAIN (Dangling!)", (sum(latencies) / len(latencies)) if latencies else None
             
             if has_ip:
-                return True, "RESOLVES"
-            return False, "NO ADDRESS RECORDS FOUND"
+                return True, "RESOLVES", (sum(latencies) / len(latencies)) if latencies else None
+            return False, "NO ADDRESS RECORDS FOUND", (sum(latencies) / len(latencies)) if latencies else None
         except:
-            return False, "ERROR"
+            return False, "ERROR", None
 
     def check_port_25(self, server):
         """Check if SMTP port 25 is open on a target (MX Reachability)."""
+        start = time.time()
         try:
             with socket.create_connection((server, 25), timeout=2.0):
-                return True
+                latency = (time.time() - start) * 1000
+                return True, latency
         except:
-            return False
+            return False, None
 
     def detect_wildcard(self, server, domain, rd=True):
         """Check if zone has a wildcard entry by querying a random sub-subdomain."""
@@ -320,16 +386,17 @@ class DNSEngine:
         try:
             res = self.query(server, test_domain, "A", rd=rd)
             if res['status'] == "NOERROR" and res['answers']:
-                return True, res['answers']
-            return False, None
+                return True, res['answers'], res.get("latency")
+            return False, None, res.get("latency")
         except:
-            return False, None
+            return False, None, None
 
     def check_ecs_support(self, server):
         """Check if server respects/handles EDNS Client Subnet (ECS)."""
         # ECS is Option 8. We send a dummy subnet (1.2.3.0/24)
         # Note: Many servers don't reflect ECS back unless they have a reason, 
         # but we check if the response contains the option or if it's handled.
+        start = time.time()
         try:
             from dns.edns import GenericOption
             # Option 8: Family 1 (IPv4), Source 24, Scope 0, Address 1.2.3.0
@@ -338,26 +405,28 @@ class DNSEngine:
             query = dns.message.make_query("google.com", "A")
             query.use_edns(edns=0, payload=1232, options=options)
             response = dns.query.udp(query, server, timeout=self.timeout)
+            latency = (time.time() - start) * 1000
             
             # If server returns ECS option, it's a strong SIGN of support
             for opt in response.options:
-                if opt.otype == 8: return True
-            return False
+                if opt.otype == 8: return True, latency
+            return False, latency
         except:
-            return False
+            return False, None
 
     def check_qname_minimization(self, server, rd=True):
         """Heuristic check for QNAME minimization via qnamemintest.internet.nl."""
         try:
             res_txt = self.query(server, "qnamemintest.internet.nl", "TXT", rd=rd)
             for ans in res_txt['answers']:
-                if "HOORAY" in ans.upper(): return True
-            return False
+                if "HOORAY" in ans.upper(): return True, res_txt.get("latency")
+            return False, res_txt.get("latency")
         except:
-            return False
+            return False, None
 
     def check_dns_cookies(self, server):
         """Check for DNS Cookies (RFC 7873) support."""
+        start = time.time()
         try:
             # Request cookie (Option 10)
             from dns.edns import GenericOption
@@ -367,19 +436,40 @@ class DNSEngine:
             query = dns.message.make_query(".", "SOA")
             query.use_edns(edns=0, payload=1232, options=options)
             response = dns.query.udp(query, server, timeout=self.timeout)
+            latency = (time.time() - start) * 1000
             
             for opt in response.options:
-                if opt.otype == 10: return True
-            return False
+                if opt.otype == 10: return True, latency
+            return False, latency
         except:
-            return False
+            return False, None
 
     def validate_caa(self, server, domain, rd=True):
         """Check for CAA records (Certificate Authority Authorization)."""
         try:
             res = self.query(server, domain, "CAA", rd=rd)
             if res['status'] == "NOERROR" and res['answers']:
-                return True, res['answers']
-            return False, []
+                return True, res['answers'], res.get("latency"), {
+                    "protocol": res.get("protocol"),
+                    "rcode": res.get("status"),
+                    "flags": res.get("flags"),
+                    "query_size": res.get("query_size"),
+                    "response_size": res.get("response_size"),
+                    "authority_count": res.get("authority_count"),
+                    "answer_count": res.get("answer_count"),
+                    "aa": res.get("aa"),
+                    "tc": res.get("tc"),
+                }
+            return False, [], res.get("latency"), {
+                "protocol": res.get("protocol"),
+                "rcode": res.get("status"),
+                "flags": res.get("flags"),
+                "query_size": res.get("query_size"),
+                "response_size": res.get("response_size"),
+                "authority_count": res.get("authority_count"),
+                "answer_count": res.get("answer_count"),
+                "aa": res.get("aa"),
+                "tc": res.get("tc"),
+            }
         except:
-            return False, []
+            return False, [], None, {"protocol": "udp", "failure_reason": "error"}

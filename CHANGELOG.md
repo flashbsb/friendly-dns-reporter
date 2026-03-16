@@ -2,9 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [6.9.4] - 2026-03-16
+### Changed
+- **Version Milestone**: Incremented version to 6.9.4.
+- **Phase 1 Telemetry Expansion**:
+  - Added direct UDP/53 probe timing instead of relying only on derived UDP service conclusions.
+  - Added repeated critical probes for `UDP53`, `TCP53`, `DoT`, `DoH`, and `Open Resolver`, with stored min/avg/max, jitter, sample counts, and stability markers.
+  - Preserved richer probe evidence including protocol, `rcode`, flags, query/response sizes, authority counts, answer counts, `AA`, `TC`, `RA`, and HTTP status where applicable.
+- **Phase 2 Zone Telemetry Expansion**:
+  - Added repeated `SOA` and `NS` measurements with stored min/avg/max, jitter, sample counts, and status stability.
+  - Preserved richer evidence for `SOA`, `NS`, `CAA`, and zone-level `DNSSEC` checks, including query/response sizes and DNS response metadata.
+  - Added `scope_confidence` and `used_fallback` so shortened or fallback-based zone conclusions are clearly distinguished.
+- **Phase Analytics Upgrade**:
+  - Phase 1 now reports `Transport Consistency`, `Control Plane Health`, `Exposure Posture`, and `Observability Quality`.
+  - Phase 2 now reports `Authority Integrity`, `Transfer Exposure Posture`, `Zone Hygiene`, `Fallback Dependency`, `Scope Confidence`, and `Zone Stability`.
+- **Reporting and Presentation Alignment**:
+  - Terminal, TXT, and HTML outputs now expose Phase 1 and Phase 2 evidence and repeatability details instead of hiding them in raw data only.
+  - Dashboard compact analytics were updated to prioritize the new Phase 1 and Phase 2 operational indicators.
+
+## [6.9.3] - 2026-03-16
+### Changed
+- **Version Milestone**: Incremented version to 6.9.3.
+
 ## [6.9.2] - 2026-03-16
 ### Added
-- **Plain Text Report Export**: Added generation of a `.txt` report alongside the existing outputs for copy/paste, ticketing, and offline sharing.
+- **Plain Text Report Export**: Added optional generation of a `.txt` report for copy/paste, ticketing, and offline sharing.
 - **Terminal Executive Takeaways**: Added a final action-oriented summary block to highlight public recursion, zone desynchronization, semantic findings, wildcard behavior, and score applicability.
 - **Phase Snapshots in Terminal**: Added compact pre-table summaries for Infrastructure, Zones, and Records to improve live execution readability.
 - **Progress Activity Context**: Added inline progress context so long-running phases can expose active targets without switching away from single-line progress behavior.
@@ -30,6 +52,7 @@ All notable changes to this project will be documented in this file.
   - Expanded presentation of zone audit, wildcard, and richer infrastructure context.
 - **README Refresh**:
   - Updated CLI usage examples and removed unsupported flags from documentation.
+  - Documented `--install-missing-deps` and clarified dependency installation behavior.
   - Reworked the logic-flow diagram to better match the current pipeline and outputs.
   - Cleaned up encoding issues and aligned version references with the current release.
 

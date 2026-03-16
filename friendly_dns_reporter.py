@@ -5,7 +5,6 @@
 =============================================================================
 FRIENDLY DNS REPORTER
 =============================================================================
-Version: 6.9.2
 Author: flashbsb
 Description: 3-Phase Automated DNS diagnostics for Windows and Linux.
 =============================================================================
@@ -15,8 +14,13 @@ import sys
 import os
 import subprocess
 
-def _verify_and_install_dependencies():
-    """Verify and automatically install required dependencies for Windows and Linux."""
+BOOTSTRAP_LOGS = []
+
+def _bootstrap_note(message):
+    BOOTSTRAP_LOGS.append(message)
+
+def _get_missing_dependencies():
+    """Return the list of missing pip packages required by the script."""
     required_packages = {
         "urllib3": "urllib3",
         "dns": "dnspython",
@@ -31,42 +35,256 @@ def _verify_and_install_dependencies():
             __import__(module_name)
         except ImportError:
             missing_packages.append(pip_name)
-            
-    if missing_packages:
-        print(f"[*] Missing dependencies detected: {', '.join(missing_packages)}")
-        print(f"[*] Attempting to install missing dependencies automatically...")
-        try:
-            # Use sys.executable to ensure pip corresponds to the current python environment
-            subprocess.check_call([sys.executable, "-m", "pip", "install"] + missing_packages)
-            print("[+] Dependencies installed successfully. Resuming execution...\n")
-        except subprocess.CalledProcessError as e:
-            print(f"[-] Failed to install dependencies automatically. Error: {e}")
-            print(f"[-] Please manually run: {sys.executable} -m pip install {' '.join(missing_packages)}")
-            sys.exit(1)
+    return missing_packages
 
-_verify_and_install_dependencies()
+def _handle_missing_dependencies(missing_packages, auto_install=False):
+    """Prompt or instruct the user about missing dependencies."""
+    if not missing_packages:
+        return
+
+    install_cmd = f"{sys.executable} -m pip install {' '.join(missing_packages)}"
+    _bootstrap_note(f"Missing dependencies detected: {', '.join(missing_packages)}")
+    print("[*] Missing dependencies detected:")
+    for pkg in missing_packages:
+        print(f"    - {pkg}")
+
+    if auto_install:
+        _bootstrap_note("Automatic dependency installation explicitly enabled by --install-missing-deps.")
+        print("[*] Automatic dependency installation explicitly enabled by --install-missing-deps.")
+        should_install = True
+    elif sys.stdin is None or not sys.stdin.isatty():
+        _bootstrap_note("Non-interactive session detected. Automatic installation disabled by default.")
+        print("[-] Non-interactive session detected. Automatic installation is disabled by default.")
+        print(f"[-] Install them manually with:\n    {install_cmd}")
+        sys.exit(1)
+    else:
+        reply = input("[?] Attempt automatic installation now? [y/N]: ").strip().lower()
+        should_install = reply in ("y", "yes")
+
+    if not should_install:
+        _bootstrap_note("Dependency installation canceled by user.")
+        print("[-] Dependency installation canceled by user.")
+        print(f"[-] Install them manually with:\n    {install_cmd}")
+        sys.exit(1)
+
+    print("[*] Attempting to install missing dependencies automatically...")
+    _bootstrap_note("Attempting automatic installation of missing dependencies.")
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install"] + missing_packages)
+        _bootstrap_note("Missing dependencies installed successfully.")
+        print("[+] Dependencies installed successfully. Resuming execution...\n")
+    except subprocess.CalledProcessError as e:
+        _bootstrap_note(f"Automatic dependency installation failed: {e}")
+        print(f"[-] Failed to install dependencies automatically. Error: {e}")
+        print(f"[-] Please manually run:\n    {install_cmd}")
+        sys.exit(1)
 
 import argparse
 import csv
 import concurrent.futures
 import ipaddress
 import threading
-import urllib3
 import logging
 import time
 from datetime import datetime
 
-from core.dns_engine import DNSEngine
-from core.connectivity import Connectivity
-from core.reporting import Reporter
-import core.validators as validators
 from core.config_loader import Settings
-import core.ui as ui
+from core.version import VERSION
 
-# Silence DoH/DoT HTTPS warnings
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+def _log_bootstrap_messages(enabled):
+    if enabled and BOOTSTRAP_LOGS:
+        for entry in BOOTSTRAP_LOGS:
+            logging.info(f"[BOOTSTRAP] {entry}")
 
-VERSION = "6.9.2"
+def _truncate_for_log(value, limit=240):
+    text = str(value).replace("\r", "\\r").replace("\n", "\\n")
+    return text if len(text) <= limit else text[:limit - 3] + "..."
+
+def _latency_or_none(value):
+    if value is None:
+        return None
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+def _status_latency(status, latency, success_statuses=None):
+    success_statuses = success_statuses or {"OK", "OPEN", "NOERROR", "NXDOMAIN", "REFUSED", "NO_RECURSION", "SERVFAIL", "HIDDEN"}
+    return _latency_or_none(latency) if status in success_statuses else None
+
+def _collect_available_latencies(*values):
+    return [float(v) for v in values if isinstance(v, (int, float)) and v > 0]
+
+def _format_probe_basis(latencies):
+    if not latencies:
+        return "N/A"
+    avg = sum(latencies) / len(latencies)
+    return f"{avg:.1f}ms across {len(latencies)} measured probe(s)"
+
+def _latency_log(value):
+    return f"{value:.1f}ms" if value is not None else "N/A"
+
+def _probe_failure_reason(status, latency=None):
+    text = str(status or "").upper()
+    if latency is None and text in {"OK", "OPEN", "NOERROR", "NXDOMAIN", "REFUSED", "NO_RECURSION", "SERVFAIL", "HIDDEN"}:
+        return "no_timing"
+    if "TIMEOUT" in text:
+        return "timeout"
+    if "UNREACHABLE" in text:
+        return "unreachable"
+    if text in {"CLOSED", "NO"}:
+        return "closed"
+    if text in {"DISABLED", "N/A"}:
+        return "not_evaluated"
+    if text.startswith("ERROR"):
+        return "error"
+    if text in {"FAIL", "FALSE"}:
+        return "probe_failed"
+    if text in {"OK", "OPEN", "NOERROR", "NXDOMAIN", "REFUSED", "NO_RECURSION", "SERVFAIL", "HIDDEN"}:
+        return "none"
+    return text.lower() if text else "unknown"
+
+def _set_probe_observability(res, name, status, latency, source="direct"):
+    res[f"{name}_timing_source"] = source
+    res[f"{name}_failure_reason"] = _probe_failure_reason(status, latency)
+
+def _store_probe_evidence(res, name, meta):
+    meta = meta or {}
+    res[f"{name}_protocol"] = meta.get("protocol")
+    res[f"{name}_rcode"] = meta.get("rcode")
+    res[f"{name}_flags"] = meta.get("flags")
+    res[f"{name}_query_size"] = meta.get("query_size")
+    res[f"{name}_response_size"] = meta.get("response_size")
+    res[f"{name}_authority_count"] = meta.get("authority_count")
+    res[f"{name}_answer_count"] = meta.get("answer_count")
+    if "aa" in meta:
+        res[f"{name}_aa"] = meta.get("aa")
+    if "tc" in meta:
+        res[f"{name}_tc"] = meta.get("tc")
+    if "http_status" in meta:
+        res[f"{name}_http_status"] = meta.get("http_status")
+    if "ra" in meta:
+        res[f"{name}_ra"] = meta.get("ra")
+
+def _run_repeated_probe(probe_fn, repeats, success_statuses=None):
+    success_statuses = set(success_statuses or {"OK"})
+    attempts = []
+    status_counts = {}
+    last_seen = {}
+    meta_choice = {}
+
+    for idx in range(max(1, int(repeats or 1))):
+        status, latency, meta = probe_fn()
+        latency = _latency_or_none(latency)
+        attempts.append({"status": status, "latency": latency})
+        status_counts[status] = status_counts.get(status, 0) + 1
+        last_seen[status] = idx
+        if meta and not meta_choice:
+            meta_choice = meta
+        if meta and status in success_statuses:
+            meta_choice = meta
+
+    representative_status = max(status_counts, key=lambda s: (status_counts[s], last_seen[s])) if status_counts else "N/A"
+    successful_latencies = [a["latency"] for a in attempts if a["status"] in success_statuses and a["latency"] is not None]
+    first_latency = successful_latencies[0] if successful_latencies else None
+    min_latency = min(successful_latencies) if successful_latencies else None
+    max_latency = max(successful_latencies) if successful_latencies else None
+    avg_latency = round(sum(successful_latencies) / len(successful_latencies), 2) if successful_latencies else None
+    jitter = round(max_latency - min_latency, 2) if len(successful_latencies) >= 2 else None
+
+    return {
+        "status": representative_status,
+        "latency": avg_latency,
+        "first": first_latency,
+        "min": min_latency,
+        "max": max_latency,
+        "jitter": jitter,
+        "sample_count": len(attempts),
+        "measured_count": len(successful_latencies),
+        "status_consistent": len(status_counts) <= 1,
+        "status_samples": [a["status"] for a in attempts],
+        "meta": meta_choice,
+    }
+
+def _store_probe_repeat_summary(res, name, summary):
+    res[f"{name}_sample_count"] = summary.get("sample_count", 0)
+    res[f"{name}_measured_count"] = summary.get("measured_count", 0)
+    res[f"{name}_latency_first"] = summary.get("first")
+    res[f"{name}_latency_min"] = summary.get("min")
+    res[f"{name}_latency_avg"] = summary.get("latency")
+    res[f"{name}_latency_max"] = summary.get("max")
+    res[f"{name}_latency_jitter"] = summary.get("jitter")
+    res[f"{name}_status_consistent"] = summary.get("status_consistent")
+    res[f"{name}_status_samples"] = summary.get("status_samples", [])
+
+def _store_query_evidence(res, name, query_result):
+    query_result = query_result or {}
+    res[f"{name}_protocol"] = query_result.get("protocol")
+    res[f"{name}_rcode"] = query_result.get("status")
+    res[f"{name}_flags"] = query_result.get("flags")
+    res[f"{name}_query_size"] = query_result.get("query_size")
+    res[f"{name}_response_size"] = query_result.get("response_size")
+    res[f"{name}_authority_count"] = query_result.get("authority_count")
+    res[f"{name}_answer_count"] = query_result.get("answer_count")
+    res[f"{name}_aa"] = query_result.get("aa")
+    res[f"{name}_tc"] = query_result.get("tc")
+
+def _run_repeated_query(query_fn, repeats, success_statuses=None):
+    success_statuses = set(success_statuses or {"NOERROR"})
+    attempts = []
+    status_counts = {}
+    last_seen = {}
+    representative_query = {}
+
+    for idx in range(max(1, int(repeats or 1))):
+        query_result = query_fn()
+        attempts.append(query_result)
+        status = query_result.get("status")
+        status_counts[status] = status_counts.get(status, 0) + 1
+        last_seen[status] = idx
+        if not representative_query:
+            representative_query = query_result
+        if status in success_statuses:
+            representative_query = query_result
+
+    representative_status = max(status_counts, key=lambda s: (status_counts[s], last_seen[s])) if status_counts else "N/A"
+    successful_latencies = [q.get("latency") for q in attempts if q.get("status") in success_statuses and _latency_or_none(q.get("latency")) is not None]
+    successful_latencies = [_latency_or_none(v) for v in successful_latencies if _latency_or_none(v) is not None]
+    first_latency = successful_latencies[0] if successful_latencies else None
+    min_latency = min(successful_latencies) if successful_latencies else None
+    max_latency = max(successful_latencies) if successful_latencies else None
+    avg_latency = round(sum(successful_latencies) / len(successful_latencies), 2) if successful_latencies else None
+    jitter = round(max_latency - min_latency, 2) if len(successful_latencies) >= 2 else None
+
+    return representative_query, {
+        "status": representative_status,
+        "latency": avg_latency,
+        "first": first_latency,
+        "min": min_latency,
+        "max": max_latency,
+        "jitter": jitter,
+        "sample_count": len(attempts),
+        "measured_count": len(successful_latencies),
+        "status_consistent": len(status_counts) <= 1,
+        "status_samples": [q.get("status") for q in attempts],
+    }
+
+def _query_log_payload(query_result, include_full_response=False):
+    payload = {
+        "status": query_result.get("status"),
+        "latency_ms": round(query_result.get("latency", 0), 2),
+        "flags": query_result.get("flags", []),
+        "aa": query_result.get("aa"),
+        "tc": query_result.get("tc"),
+        "ttl": query_result.get("ttl"),
+        "answers": query_result.get("answers", []),
+        "authority": query_result.get("authority", []),
+        "nsid": query_result.get("nsid"),
+    }
+    if include_full_response:
+        payload["full_response"] = _truncate_for_log(query_result.get("full_response", ""), 1200)
+    return payload
 
 # Setup Logging
 def setup_logging(settings):
@@ -185,7 +403,7 @@ def compare_consistency(queries, settings):
     return all(_get_key(q) == base_key for q in queries[1:])
 
 def is_open_resolver_safe(status):
-    return status in {"REFUSED", "NO_RECURSION", "CLOSED", "SAFE"}
+    return status in {"REFUSED", "NO_RECURSION", "CLOSED"}
 
 def classify_open_resolver(status):
     if status == "OPEN":
@@ -238,9 +456,9 @@ def score_label(value):
         return "N/A"
     return int(value)
 
-def start_phase_watchdog(label, counters, total, active_items, lock, interval=5.0):
+def start_phase_watchdog(label, counters, total, active_items, lock, interval=5.0, log_enabled=False):
     stop_event = threading.Event()
-    state = {"last_done": 0, "last_change": time.time(), "status": ""}
+    state = {"last_done": 0, "last_change": time.time(), "status": "", "last_idle_bucket": -1}
 
     def _watch():
         while not stop_event.wait(interval):
@@ -252,9 +470,22 @@ def start_phase_watchdog(label, counters, total, active_items, lock, interval=5.
                 state["last_done"] = done
                 state["last_change"] = now
                 state["status"] = ""
+                state["last_idle_bucket"] = -1
                 continue
             if done < total:
-                state["status"] = ui.format_progress_status(active_snapshot, now - state["last_change"])
+                idle_for = now - state["last_change"]
+                state["status"] = ui.format_progress_status(active_snapshot, idle_for)
+                idle_bucket = int(idle_for // interval)
+                if log_enabled and idle_bucket > state["last_idle_bucket"]:
+                    state["last_idle_bucket"] = idle_bucket
+                    logging.warning(
+                        "[%s] No task completion for %.1fs (%s/%s). Active: %s",
+                        label,
+                        idle_for,
+                        done,
+                        total,
+                        ", ".join(active_snapshot[:5]) if active_snapshot else "none",
+                    )
 
     watcher = threading.Thread(target=_watch, daemon=True)
     watcher.start()
@@ -286,9 +517,9 @@ def run_phase1_infrastructure(servers, srv_groups, srv_profiles, conn, dns_engin
         # 1. Connectivity Probes (Ping)
         ping_res = conn.ping(srv, count=settings.ping_count) if settings.enable_ping else {"is_alive": True}
         res["ping"] = "OK" if ping_res.get("is_alive") else "FAIL"
-        res["latency"] = ping_res.get("avg_rtt", 0)
-        res["latency_min"] = ping_res.get("min_rtt", 0)
-        res["latency_max"] = ping_res.get("max_rtt", 0)
+        res["latency"] = _latency_or_none(ping_res.get("avg_rtt"))
+        res["latency_min"] = _latency_or_none(ping_res.get("min_rtt"))
+        res["latency_max"] = _latency_or_none(ping_res.get("max_rtt"))
         res["packet_loss"] = ping_res.get("packet_loss", 0.0)
         res["ping_count"] = settings.ping_count 
         res["ping_latency_warn"] = settings.ping_latency_warn
@@ -298,32 +529,54 @@ def run_phase1_infrastructure(servers, srv_groups, srv_profiles, conn, dns_engin
         
         # 2. Deep Service Probes (Port vs. Service)
         
-        # UDP 53 (Pre-calculated via Version/Recursion)
+        critical_probe_repeats = settings.phase1_probe_repeats
+
+        # UDP 53 (direct DNS responsiveness probe)
         res["port53u"] = "OPEN" # UDP always assumed open if we try it, but we'll validate service below
-        
+        udp_summary = _run_repeated_probe(lambda: dns_engine.check_udp(srv), critical_probe_repeats, {"OK"})
+        res["udp53_status_raw"] = udp_summary["status"]
+        res["udp53_probe_lat"] = udp_summary["latency"]
+        _store_probe_repeat_summary(res, "udp53_probe", udp_summary)
+        _store_probe_evidence(res, "udp53_probe", udp_summary.get("meta"))
+
         # TCP 53
         p53t_open, p53t_lat = conn.check_port(srv, 53)
         res["port53t"] = "OPEN" if p53t_open else "CLOSED"
         res["port53t_serv"] = "N/A"
+        res["port53t_conn_lat"] = _latency_or_none(p53t_lat)
+        res["port53t_probe_lat"] = None
+        _set_probe_observability(res, "tcp53_connect", res["port53t"], res["port53t_conn_lat"])
         if p53t_open:
-            st, lat = dns_engine.check_tcp(srv)
-            res["port53t_serv"] = st
-            if st == "OK": p53t_lat = lat
-        res["port53t_lat"] = p53t_lat
+            tcp_summary = _run_repeated_probe(lambda: dns_engine.check_tcp(srv), critical_probe_repeats, {"OK"})
+            res["port53t_serv"] = tcp_summary["status"]
+            res["port53t_probe_lat"] = tcp_summary["latency"]
+            _store_probe_repeat_summary(res, "tcp53_probe", tcp_summary)
+            _store_probe_evidence(res, "tcp53_probe", tcp_summary.get("meta"))
+        else:
+            _store_probe_repeat_summary(res, "tcp53_probe", {"sample_count": 0, "measured_count": 0, "first": None, "min": None, "latency": None, "max": None, "jitter": None, "status_consistent": None, "status_samples": []})
+        _set_probe_observability(res, "tcp53_probe", res["port53t_serv"], res["port53t_probe_lat"])
+        res["port53t_lat"] = res["port53t_probe_lat"] or res["port53t_conn_lat"]
 
         # 3. DNS-Dependent Checks (UDP)
-        v, v_lat = dns_engine.query_version(srv) if settings.check_bind_version else ("DISABLED", 0)
+        v, v_lat, v_meta = dns_engine.query_version(srv) if settings.check_bind_version else ("DISABLED", 0, {})
         res["version"] = v if v is not None else "TIMEOUT"
-        res["version_lat"] = v_lat
+        res["version_lat"] = _status_latency(res["version"], v_lat)
+        _set_probe_observability(res, "version", res["version"], res["version_lat"])
+        _store_probe_evidence(res, "version", v_meta)
         
-        r, r_lat = dns_engine.check_recursion(srv) if settings.enable_recursion_check else (False, 0)
+        r, r_lat, r_meta = dns_engine.check_recursion(srv) if settings.enable_recursion_check else (False, 0, {})
         res["recursion"] = "OPEN" if r is True else ("CLOSED" if r is False else "TIMEOUT")
-        res["recursion_lat"] = r_lat
+        res["recursion_lat"] = _status_latency(res["recursion"], r_lat, {"OPEN", "CLOSED"})
+        _set_probe_observability(res, "recursion", res["recursion"], res["recursion_lat"])
+        _store_probe_evidence(res, "recursion", r_meta)
         
         # Service Validation for UDP 53
-        udp_serv_ok = res["version"] not in ["TIMEOUT", "UNREACHABLE", "DISABLED"] or \
-                      res["recursion"] not in ["TIMEOUT", "UNREACHABLE", "DISABLED"]
-        res["port53u_serv"] = "OK" if udp_serv_ok else ("TIMEOUT" if (res["version"] == "TIMEOUT" or res["recursion"] == "TIMEOUT") else "FAIL")
+        udp_aux_ok = res["version"] not in ["TIMEOUT", "UNREACHABLE", "DISABLED"] or \
+                     res["recursion"] not in ["TIMEOUT", "UNREACHABLE", "DISABLED"]
+        udp_serv_ok = res["udp53_status_raw"] == "OK" or udp_aux_ok
+        udp_timeout_seen = any(status == "TIMEOUT" for status in [res.get("udp53_status_raw"), res.get("version"), res.get("recursion")])
+        res["port53u_serv"] = "OK" if udp_serv_ok else ("TIMEOUT" if udp_timeout_seen else "FAIL")
+        _set_probe_observability(res, "udp53_probe", res["port53u_serv"], res["udp53_probe_lat"], source="direct")
         
         # Circuit Breaker Logic: SERVER IS DEAD only if PORT and SERVICE fail across the board
         is_alive = (res["ping"] == "OK") or udp_serv_ok or (res["port53t_serv"] == "OK")
@@ -336,65 +589,170 @@ def run_phase1_infrastructure(servers, srv_groups, srv_profiles, conn, dns_engin
             res["port53t_serv"] = "FAIL"
             res["port853_serv"] = "FAIL"
             res["port443_serv"] = "FAIL"
+            for field in [
+                "version_lat", "recursion_lat", "port53t_probe_lat", "dot_lat", "doh_lat",
+                "dnssec_lat", "edns0_lat", "open_resolver_lat", "port853_conn_lat", "port443_conn_lat",
+                "ecs_lat", "qname_min_lat", "cookies_lat", "web_risk_lat", "probe_latency_avg"
+            ]:
+                res[field] = None
+            res["web_risk_timings"] = {}
+            res["web_risk_status"] = {80: "CLOSED", 443: "CLOSED"}
+            for probe_name, probe_status, probe_latency, source in [
+                ("udp53_probe", res.get("port53u_serv"), res.get("udp53_probe_lat"), "derived"),
+                ("tcp53_connect", res.get("port53t"), res.get("port53t_conn_lat"), "direct"),
+                ("tcp53_probe", res.get("port53t_serv"), res.get("port53t_probe_lat"), "direct"),
+                ("version", res.get("version"), res.get("version_lat"), "direct"),
+                ("recursion", res.get("recursion"), res.get("recursion_lat"), "direct"),
+                ("dot_connect", res.get("port853", "CLOSED"), res.get("port853_conn_lat"), "direct"),
+                ("dot_probe", res.get("dot"), res.get("dot_lat"), "direct"),
+                ("doh_connect", res.get("port443", "CLOSED"), res.get("port443_conn_lat"), "direct"),
+                ("doh_probe", res.get("doh"), res.get("doh_lat"), "direct"),
+                ("dnssec", res.get("dnssec"), res.get("dnssec_lat"), "direct"),
+                ("edns0", res.get("edns0"), res.get("edns0_lat"), "direct"),
+                ("open_resolver", res.get("open_resolver"), res.get("open_resolver_lat"), "direct"),
+                ("ecs", res.get("ecs"), res.get("ecs_lat"), "direct"),
+                ("qname_min", res.get("qname_min"), res.get("qname_min_lat"), "not_applicable"),
+                ("cookies", res.get("cookies"), res.get("cookies_lat"), "direct"),
+                ("web_risk", "CLOSED", res.get("web_risk_lat"), "multi_port"),
+            ]:
+                _set_probe_observability(res, probe_name, probe_status, probe_latency, source)
+            res["measured_probe_count"] = len(_collect_available_latencies(res.get("port53t_conn_lat")))
+            res["probe_expected_count"] = 17
+            res["probe_coverage_ratio"] = round((res["measured_probe_count"] / res["probe_expected_count"]) * 100, 1) if res["probe_expected_count"] else 0.0
         else:
-            logging.info(f"[PHASE 1] Server {srv} is ALIVE. Latency: {res['latency']:.1f}ms, Loss: {res['packet_loss']}%")
+            ping_display = f"{res['latency']:.1f}ms" if res.get("latency") is not None else "N/A"
+            logging.info(f"[PHASE 1] Server {srv} is ALIVE. Latency: {ping_display}, Loss: {res['packet_loss']}%")
             # Protocols (DoT/DoH)
             p853_open, p853_slat = conn.check_port(srv, 853)
             logging.info(f"[PHASE 1] Server {srv}: Port 853 is {'OPEN' if p853_open else 'CLOSED'}")
             res["port853"] = "OPEN" if p853_open else "CLOSED"
             res["port853_serv"] = "FAIL"
+            res["port853_conn_lat"] = _latency_or_none(p853_slat)
+            _set_probe_observability(res, "dot_connect", res["port853"], res["port853_conn_lat"])
             if p853_open:
-                dot_st, dot_lat = dns_engine.check_dot(srv) if settings.enable_dot_check else ("DISABLED", 0)
-                logging.info(f"[PHASE 1] Server {srv}: DoH Check result: {dot_st} ({dot_lat:.1f}ms)")
-                res["dot"] = dot_st
-                res["dot_lat"] = dot_lat
-                res["port853_serv"] = dot_st
+                dot_summary = _run_repeated_probe(lambda: dns_engine.check_dot(srv), critical_probe_repeats, {"OK"}) if settings.enable_dot_check else {"status": "DISABLED", "latency": None, "first": None, "min": None, "max": None, "jitter": None, "sample_count": 0, "measured_count": 0, "status_consistent": None, "status_samples": [], "meta": {}}
+                logging.info(f"[PHASE 1] Server {srv}: DoT Check result: {dot_summary['status']} ({_latency_log(dot_summary['latency'])})")
+                res["dot"] = dot_summary["status"]
+                res["dot_lat"] = dot_summary["latency"]
+                res["port853_serv"] = res["dot"]
+                _store_probe_repeat_summary(res, "dot_probe", dot_summary)
+                _store_probe_evidence(res, "dot_probe", dot_summary.get("meta"))
             else:
                 res["dot"] = "NO"
-                res["dot_lat"] = 0
+                res["dot_lat"] = None
+                _store_probe_repeat_summary(res, "dot_probe", {"sample_count": 0, "measured_count": 0, "first": None, "min": None, "latency": None, "max": None, "jitter": None, "status_consistent": None, "status_samples": []})
+            _set_probe_observability(res, "dot_probe", res["dot"], res["dot_lat"])
 
             p443_open, p443_slat = conn.check_port(srv, 443)
             logging.info(f"[PHASE 1] Server {srv}: Port 443 is {'OPEN' if p443_open else 'CLOSED'}")
             res["port443"] = "OPEN" if p443_open else "CLOSED"
             res["port443_serv"] = "FAIL"
+            res["port443_conn_lat"] = _latency_or_none(p443_slat)
+            _set_probe_observability(res, "doh_connect", res["port443"], res["port443_conn_lat"])
             if p443_open:
-                doh_st, doh_lat = dns_engine.check_doh(srv) if settings.enable_doh_check else ("DISABLED", 0)
-                logging.info(f"[PHASE 1] Server {srv}: DoH Check result: {doh_st} ({doh_lat:.1f}ms)")
-                res["doh"] = doh_st
-                res["doh_lat"] = doh_lat
-                res["port443_serv"] = doh_st
+                doh_summary = _run_repeated_probe(lambda: dns_engine.check_doh(srv), critical_probe_repeats, {"OK"}) if settings.enable_doh_check else {"status": "DISABLED", "latency": None, "first": None, "min": None, "max": None, "jitter": None, "sample_count": 0, "measured_count": 0, "status_consistent": None, "status_samples": [], "meta": {}}
+                logging.info(f"[PHASE 1] Server {srv}: DoH Check result: {doh_summary['status']} ({_latency_log(doh_summary['latency'])})")
+                res["doh"] = doh_summary["status"]
+                res["doh_lat"] = doh_summary["latency"]
+                res["port443_serv"] = res["doh"]
+                _store_probe_repeat_summary(res, "doh_probe", doh_summary)
+                _store_probe_evidence(res, "doh_probe", doh_summary.get("meta"))
             else:
                 res["doh"] = "NO"
-                res["doh_lat"] = 0
+                res["doh_lat"] = None
+                _store_probe_repeat_summary(res, "doh_probe", {"sample_count": 0, "measured_count": 0, "first": None, "min": None, "latency": None, "max": None, "jitter": None, "status_consistent": None, "status_samples": []})
+            _set_probe_observability(res, "doh_probe", res["doh"], res["doh_lat"])
             
             # Advanced Infrastructure Checks
-            dnssec, dsec_lat = dns_engine.check_dnssec(srv) if settings.enable_dnssec_check else (False, 0)
-            logging.info(f"[PHASE 1] Server {srv}: DNSSEC data support: {dnssec} ({dsec_lat:.1f}ms)")
+            dnssec, dsec_lat, dnssec_meta = dns_engine.check_dnssec(srv) if settings.enable_dnssec_check else (False, 0, {})
+            logging.info(f"[PHASE 1] Server {srv}: DNSSEC data support: {dnssec} ({_latency_log(dsec_lat)})")
             res["dnssec"] = "OK" if dnssec is True else ("FAIL" if dnssec is False else "TIMEOUT")
-            res["dnssec_lat"] = dsec_lat
+            res["dnssec_lat"] = _status_latency(res["dnssec"], dsec_lat, {"OK", "FAIL"})
+            _set_probe_observability(res, "dnssec", res["dnssec"], res["dnssec_lat"])
+            _store_probe_evidence(res, "dnssec", dnssec_meta)
             
-            edns0, edns_lat = dns_engine.check_edns0(srv) if settings.enable_edns_check else (False, 0)
-            logging.info(f"[PHASE 1] Server {srv}: EDNS0 support: {edns0} ({edns_lat:.1f}ms)")
+            edns0, edns_lat, edns_meta = dns_engine.check_edns0(srv) if settings.enable_edns_check else (False, 0, {})
+            logging.info(f"[PHASE 1] Server {srv}: EDNS0 support: {edns0} ({_latency_log(edns_lat)})")
             res["edns0"] = "OK" if edns0 is True else ("FAIL" if edns0 is False else "TIMEOUT")
-            res["edns0_lat"] = edns_lat
+            res["edns0_lat"] = _status_latency(res["edns0"], edns_lat, {"OK", "FAIL"})
+            _set_probe_observability(res, "edns0", res["edns0"], res["edns0_lat"])
+            _store_probe_evidence(res, "edns0", edns_meta)
             
-            opn_st, opn_lat = dns_engine.check_open_resolver(srv) if settings.enable_recursion_check else ("DISABLED", 0)
-            logging.info(f"[PHASE 1] Server {srv}: Open Resolver: {opn_st} ({opn_lat:.1f}ms)")
-            res["open_resolver"] = opn_st
-            res["open_resolver_lat"] = opn_lat
-            res.update(classify_open_resolver(opn_st))
+            open_summary = _run_repeated_probe(lambda: dns_engine.check_open_resolver(srv), critical_probe_repeats, {"OPEN", "REFUSED", "NO_RECURSION", "SERVFAIL"}) if settings.enable_recursion_check else {"status": "DISABLED", "latency": None, "first": None, "min": None, "latency": None, "max": None, "jitter": None, "sample_count": 0, "measured_count": 0, "status_consistent": None, "status_samples": [], "meta": {}}
+            logging.info(f"[PHASE 1] Server {srv}: Open Resolver: {open_summary['status']} ({_latency_log(open_summary['latency'])})")
+            res["open_resolver"] = open_summary["status"]
+            res["open_resolver_lat"] = open_summary["latency"]
+            res.update(classify_open_resolver(res["open_resolver"]))
+            _set_probe_observability(res, "open_resolver", res["open_resolver"], res["open_resolver_lat"])
+            _store_probe_repeat_summary(res, "open_resolver", open_summary)
+            _store_probe_evidence(res, "open_resolver", open_summary.get("meta"))
             
             # v6.0.0 Privacy & Advanced Protocol Checks
-            res["ecs"] = dns_engine.check_ecs_support(srv) if settings.enable_ecs_check else False
+            res["ecs"], res["ecs_lat"] = dns_engine.check_ecs_support(srv) if settings.enable_ecs_check else (False, None)
+            _set_probe_observability(res, "ecs", res["ecs"], res["ecs_lat"])
             if settings.enable_qname_min_check and res["server_profile"] in {"recursive", "mixed"}:
-                res["qname_min"] = dns_engine.check_qname_minimization(srv, rd=True)
+                res["qname_min"], res["qname_min_lat"] = dns_engine.check_qname_minimization(srv, rd=True)
                 res["qname_min_confidence"] = "LOW"
             else:
                 res["qname_min"] = None
+                res["qname_min_lat"] = None
                 res["qname_min_confidence"] = "NONE"
-            res["cookies"] = dns_engine.check_dns_cookies(srv) if settings.enable_dns_cookies_check else False
+            _set_probe_observability(res, "qname_min", res["qname_min"], res["qname_min_lat"], source="direct" if res["server_profile"] in {"recursive", "mixed"} else "not_applicable")
+            res["cookies"], res["cookies_lat"] = dns_engine.check_dns_cookies(srv) if settings.enable_dns_cookies_check else (False, None)
+            _set_probe_observability(res, "cookies", res["cookies"], res["cookies_lat"])
             if settings.enable_web_risk_check:
-                res["web_risks"] = dns_engine.check_web_risk(srv)
+                res["web_risks"], res["web_risk_timings"] = dns_engine.check_web_risk(srv)
+                res["web_risk_lat"] = round(
+                    sum(v for v in res["web_risk_timings"].values() if isinstance(v, (int, float)))
+                    / len([v for v in res["web_risk_timings"].values() if isinstance(v, (int, float))]),
+                    2
+                ) if any(isinstance(v, (int, float)) for v in res["web_risk_timings"].values()) else None
+            else:
+                res["web_risk_timings"] = {}
+                res["web_risk_lat"] = None
+            res["web_risk_status"] = {
+                80: "OPEN" if 80 in res.get("web_risks", []) else "CLOSED",
+                443: "OPEN" if 443 in res.get("web_risks", []) else "CLOSED",
+            }
+            _set_probe_observability(res, "web_risk", "OPEN" if res.get("web_risks") else "CLOSED", res["web_risk_lat"], source="multi_port")
+
+            measured_probe_latencies = _collect_available_latencies(
+                res.get("latency"),
+                res.get("udp53_probe_lat"),
+                res.get("version_lat"),
+                res.get("recursion_lat"),
+                res.get("port53t_conn_lat"),
+                res.get("port53t_probe_lat"),
+                res.get("port853_conn_lat"),
+                res.get("dot_lat"),
+                res.get("port443_conn_lat"),
+                res.get("doh_lat"),
+                res.get("dnssec_lat"),
+                res.get("edns0_lat"),
+                res.get("open_resolver_lat"),
+                res.get("ecs_lat"),
+                res.get("qname_min_lat"),
+                res.get("cookies_lat"),
+                res.get("web_risk_lat"),
+            )
+            res["measured_probe_count"] = len(measured_probe_latencies)
+            res["probe_latency_avg"] = round(sum(measured_probe_latencies) / len(measured_probe_latencies), 2) if measured_probe_latencies else None
+            res["probe_expected_count"] = 17
+            res["probe_coverage_ratio"] = round((res["measured_probe_count"] / res["probe_expected_count"]) * 100, 1) if res["probe_expected_count"] else 0.0
+
+            if settings.enable_execution_log:
+                logging.info(
+                    "[PHASE 1] Server %s posture: recursion=%s, resolver_class=%s, confidence=%s, "
+                    "ecs=%s, qname_min=%s, cookies=%s, web_risks=%s",
+                    srv,
+                    res.get("recursion"),
+                    res.get("classification"),
+                    res.get("confidence"),
+                    res.get("ecs"),
+                    res.get("qname_min"),
+                    res.get("cookies"),
+                    res.get("web_risks"),
+                )
         
         # Traceroute removed as requested (unused in UI)
         
@@ -407,7 +765,7 @@ def run_phase1_infrastructure(servers, srv_groups, srv_profiles, conn, dns_engin
 
     counters = {'done': 0}
     total = len(servers)
-    stop_event, watcher, watchdog_state = start_phase_watchdog("Scanning Servers", counters, total, active_items, lock)
+    stop_event, watcher, watchdog_state = start_phase_watchdog("Scanning Servers", counters, total, active_items, lock, log_enabled=settings.enable_execution_log)
     with concurrent.futures.ThreadPoolExecutor(max_workers=settings.max_threads) as executor:
         list(executor.map(_check_server, servers))
     stop_event.set()
@@ -438,7 +796,18 @@ def run_phase1_infrastructure(servers, srv_groups, srv_profiles, conn, dns_engin
     ui.print_phase_header("1: Server Infrastructure")
     for srv, res in sorted_infra:
         if settings.enable_execution_log:
-            logging.info(f"[PHASE 1] INFRA DETAIL: Server={srv}, Score={res.get('infrastructure_score', 0)}")
+            logging.info(
+                "[PHASE 1] INFRA DETAIL: Server=%s, Score=%s, Ping=%s, UDP=%s, TCP=%s, DoT=%s, DoH=%s, Resolver=%s, Risks=%s",
+                srv,
+                res.get('infrastructure_score', 0),
+                res.get('ping'),
+                res.get('port53u_serv'),
+                res.get('port53t_serv'),
+                res.get('dot'),
+                res.get('doh'),
+                res.get('classification'),
+                res.get('web_risks', []),
+            )
         ui.print_infra_detail(srv, res)
         
     # Phase Summary
@@ -458,10 +827,136 @@ def run_phase1_infrastructure(servers, srv_groups, srv_profiles, conn, dns_engin
         adoption = ((dot_ok + doh_ok + sec_ok + cook_ok) / (alive * 4)) * 100
         insights["Protocol Adoption"] = f"{adoption:.1f}% (Modern Stack)"
         
-        # Network Health vs SLAs
-        avg_lat = sum(r.get('latency', 0) for r in infra_results.values() if not r['is_dead']) / alive
-        sla_health = max(0, 100 - (avg_lat / settings.ping_latency_warn * 50)) # Very rough health metric
-        insights["Network Health"] = f"{sla_health:.1f}% (Latency SLA)"
+        # Network Health vs SLAs using all measured transport/service timings, not just ping.
+        all_probe_latencies = []
+        for row in infra_results.values():
+            if row.get("is_dead"):
+                continue
+            all_probe_latencies.extend(_collect_available_latencies(
+                row.get("latency"),
+                row.get("udp53_probe_lat"),
+                row.get("version_lat"),
+                row.get("recursion_lat"),
+                row.get("port53t_conn_lat"),
+                row.get("port53t_probe_lat"),
+                row.get("port853_conn_lat"),
+                row.get("dot_lat"),
+                row.get("port443_conn_lat"),
+                row.get("doh_lat"),
+                row.get("dnssec_lat"),
+                row.get("edns0_lat"),
+                row.get("open_resolver_lat"),
+                row.get("ecs_lat"),
+                row.get("qname_min_lat"),
+                row.get("cookies_lat"),
+                row.get("web_risk_lat"),
+            ))
+        if all_probe_latencies:
+            avg_probe_lat = sum(all_probe_latencies) / len(all_probe_latencies)
+            sla_health = max(0, 100 - (avg_probe_lat / settings.ping_latency_warn * 50))
+            insights["Network Health"] = f"{sla_health:.1f}% ({_format_probe_basis(all_probe_latencies)})"
+        else:
+            insights["Network Health"] = "N/A (no successful latency probes)"
+        repeated_probe_names = ["udp53_probe", "tcp53_probe", "dot_probe", "doh_probe", "open_resolver"]
+        stability_flags = []
+        jitter_values = []
+        for row in infra_results.values():
+            if row.get("is_dead"):
+                continue
+            for probe_name in repeated_probe_names:
+                sample_count = row.get(f"{probe_name}_sample_count", 0) or 0
+                status_consistent = row.get(f"{probe_name}_status_consistent")
+                if sample_count >= 2 and status_consistent is not None:
+                    stability_flags.append(1 if status_consistent else 0)
+                jitter = row.get(f"{probe_name}_latency_jitter")
+                if jitter is not None:
+                    jitter_values.append(jitter)
+        if stability_flags:
+            stability_pct = (sum(stability_flags) / len(stability_flags)) * 100
+            insights["Transport Stability"] = f"{stability_pct:.1f}% ({sum(stability_flags)}/{len(stability_flags)} stable repeated probes)"
+        else:
+            insights["Transport Stability"] = "N/A (no repeated probe samples)"
+        if jitter_values:
+            insights["Probe Jitter"] = f"{(sum(jitter_values) / len(jitter_values)):.1f}ms average across {len(jitter_values)} repeated probes"
+        else:
+            insights["Probe Jitter"] = "N/A (insufficient repeated latency samples)"
+        avg_probe_coverage = sum(r.get("probe_coverage_ratio", 0.0) for r in infra_results.values() if not r.get("is_dead")) / alive
+        insights["Probe Coverage"] = f"{avg_probe_coverage:.1f}% ({sum(r.get('measured_probe_count', 0) for r in infra_results.values() if not r.get('is_dead'))} measured probes)"
+
+        transport_scores = []
+        control_plane_scores = []
+        exposure_scores = []
+        observability_scores = []
+
+        for row in infra_results.values():
+            if row.get("is_dead"):
+                continue
+
+            transport_checks = []
+            udp_ok = row.get("port53u_serv") == "OK"
+            tcp_ok = row.get("port53t_serv") == "OK"
+            transport_checks.append(1 if udp_ok == tcp_ok else 0)
+
+            if row.get("port853") == "CLOSED":
+                transport_checks.append(1 if row.get("dot") == "NO" else 0)
+            else:
+                transport_checks.append(1 if row.get("dot") in {"OK", "FAIL", "TIMEOUT", "DISABLED"} else 0)
+
+            if row.get("port443") == "CLOSED":
+                transport_checks.append(1 if row.get("doh") == "NO" else 0)
+            else:
+                transport_checks.append(1 if row.get("doh") in {"OK", "FAIL", "TIMEOUT", "DISABLED"} else 0)
+
+            transport_scores.append((sum(transport_checks) / len(transport_checks)) * 100 if transport_checks else 0)
+
+            control_checks = [
+                1 if row.get("dnssec") == "OK" else 0,
+                1 if row.get("edns0") == "OK" else 0,
+                1 if row.get("cookies") is True else 0,
+            ]
+            if row.get("server_profile") in {"recursive", "mixed"}:
+                control_checks.append(1 if row.get("qname_min") is True else 0)
+                control_checks.append(1 if row.get("ecs") is False else 0)
+            control_plane_scores.append((sum(control_checks) / len(control_checks)) * 100 if control_checks else 0)
+
+            exposure_checks = [
+                1 if row.get("resolver_exposed") is not True else 0,
+                1 if not row.get("web_risks") else 0,
+            ]
+            exposure_scores.append((sum(exposure_checks) / len(exposure_checks)) * 100 if exposure_checks else 0)
+
+            repeatability_checks = []
+            for probe_name in ["udp53_probe", "tcp53_probe", "dot_probe", "doh_probe", "open_resolver"]:
+                stable = row.get(f"{probe_name}_status_consistent")
+                sample_count = row.get(f"{probe_name}_sample_count", 0) or 0
+                if sample_count >= 2 and stable is not None:
+                    repeatability_checks.append(1 if stable else 0)
+            repeatability_score = ((sum(repeatability_checks) / len(repeatability_checks)) * 100) if repeatability_checks else None
+            coverage_score = row.get("probe_coverage_ratio", 0.0) or 0.0
+            if repeatability_score is None:
+                observability_scores.append(coverage_score)
+            else:
+                observability_scores.append((coverage_score + repeatability_score) / 2)
+
+        if transport_scores:
+            insights["Transport Consistency"] = f"{(sum(transport_scores) / len(transport_scores)):.1f}% (UDP/TCP/Encrypted alignment)"
+        else:
+            insights["Transport Consistency"] = "N/A (no alive servers)"
+
+        if control_plane_scores:
+            insights["Control Plane Health"] = f"{(sum(control_plane_scores) / len(control_plane_scores)):.1f}% (DNSSEC, EDNS, cookies, privacy controls)"
+        else:
+            insights["Control Plane Health"] = "N/A (no alive servers)"
+
+        if exposure_scores:
+            insights["Exposure Posture"] = f"{(sum(exposure_scores) / len(exposure_scores)):.1f}% (resolver restriction and web exposure)"
+        else:
+            insights["Exposure Posture"] = "N/A (no alive servers)"
+
+        if observability_scores:
+            insights["Observability Quality"] = f"{(sum(observability_scores) / len(observability_scores)):.1f}% (coverage plus repeated probe stability)"
+        else:
+            insights["Observability Quality"] = "N/A (no alive servers)"
 
     phase_duration = time.time() - phase_start_time
     insights["Execution Time"] = f"{phase_duration:.2f}s"
@@ -515,6 +1010,7 @@ def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache,
         for srv, group_name in srv_group_tuples:
             srv = srv.strip()
             infra = infra_cache.get(srv, {})
+            phase2_repeats = settings.phase2_probe_repeats
             
             # Determine recursion based on specific group type for THIS server
             is_recursive = dns_groups.get(group_name, {}).get("type") == "recursive"
@@ -525,20 +1021,29 @@ def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache,
                     "serial": "N/A", "axfr_vulnerable": False, "axfr_detail": "PH1 FAIL", 
                     "status": "UNREACHABLE", "is_dead": True,
                     "caa_records": [], "web_risks": infra.get("web_risks", []), "dnssec": None,
-                    "latency": 0, "ns_list": [], "check_scope": "SKIPPED", "mname": "N/A", "rname": "N/A"
+                    "latency": None, "ns_list": [], "check_scope": "SKIPPED", "mname": "N/A", "rname": "N/A",
+                    "soa_latency": None, "soa_fallback_latency": None, "ns_latency": None,
+                    "axfr_latency": None, "caa_latency": None, "zone_dnssec_latency": None,
+                    "scope_confidence": "NONE", "used_fallback": False,
                 }
                 local_results.append(res); serials[srv] = "N/A"
                 continue
 
             try:
                 # Harmonized recursion logic matching Phase 3
-                soa = dns_engine.query(srv, domain, "SOA", rd=is_recursive)
+                soa, soa_repeat = _run_repeated_query(lambda: dns_engine.query(srv, domain, "SOA", rd=is_recursive), phase2_repeats, {"NOERROR", "NXDOMAIN"})
+                soa_repeat["status"] = soa.get("status")
+                soa_repeat["latency"] = _status_latency(soa.get("status"), soa_repeat.get("latency"), {"NOERROR", "NXDOMAIN"})
                 
                 # Smart Fallback: if preferred RD fails, try the alternative
+                soa_fallback_latency = None
+                used_fallback = False
                 if soa['status'] not in ["NOERROR", "NXDOMAIN"]:
                     soa_fallback = dns_engine.query(srv, domain, "SOA", rd=not is_recursive)
                     if soa_fallback['status'] == "NOERROR" or (soa_fallback['status'] == "NXDOMAIN" and soa['status'] != "NXDOMAIN"):
+                        soa_fallback_latency = _latency_or_none(soa_fallback.get('latency'))
                         soa = soa_fallback
+                        used_fallback = True
 
                 # Robust extraction: check answers + authority
                 records = soa['answers'] + soa.get('authority', [])
@@ -582,14 +1087,14 @@ def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache,
                     except: pass
                 
                 aa = soa.get('aa', False)
-                latency = soa.get('latency', 0)
+                latency = _latency_or_none(soa.get('latency'))
                 
                 # Reuse server-level web exposure from phase 1 when available.
                 risks = infra.get("web_risks", [])
                 web_risks[srv] = risks
 
                 if soa['status'] != "NOERROR":
-                    local_results.append({
+                    row = {
                         "domain": domain,
                         "server": srv,
                         "group": group_name,
@@ -601,6 +1106,12 @@ def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache,
                         "status": soa['status'],
                         "aa": aa,
                         "latency": latency,
+                        "soa_latency": latency,
+                        "soa_fallback_latency": soa_fallback_latency,
+                        "ns_latency": None,
+                        "axfr_latency": None,
+                        "caa_latency": None,
+                        "zone_dnssec_latency": None,
                         "ns_list": [],
                         "soa_latency_warn": settings.soa_latency_warn,
                         "soa_latency_crit": settings.soa_latency_crit,
@@ -609,17 +1120,24 @@ def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache,
                         "dnssec": None,
                         "caa_records": [],
                         "is_dead": False,
-                        "check_scope": "SOA_ONLY"
-                    })
+                        "check_scope": "SOA_ONLY",
+                        "scope_confidence": "LOW",
+                        "used_fallback": used_fallback,
+                    }
+                    _store_query_evidence(row, "soa", soa)
+                    _store_probe_repeat_summary(row, "soa", soa_repeat)
+                    local_results.append(row)
                     serials[srv] = serial
                     continue
 
                 # DNSSEC Check
-                is_signed = dns_engine.check_zone_dnssec(srv, domain) if settings.enable_zone_dnssec_check else False
+                is_signed, zone_dnssec_latency, zone_dnssec_meta = dns_engine.check_zone_dnssec(srv, domain) if settings.enable_zone_dnssec_check else (False, None, {})
                 dnssec_status.append(is_signed)
 
                 # NS Check (Check answers and authority for referrals)
-                ns_q = dns_engine.query(srv, domain, "NS", rd=is_recursive)
+                ns_q, ns_repeat = _run_repeated_query(lambda: dns_engine.query(srv, domain, "NS", rd=is_recursive), phase2_repeats, {"NOERROR", "NXDOMAIN"})
+                ns_repeat["status"] = ns_q.get("status")
+                ns_latency = _status_latency(ns_q.get('status'), ns_repeat.get('latency'))
                 
                 ns_records = ns_q['answers'] + ns_q.get('authority', [])
                 ns_list = []
@@ -634,10 +1152,12 @@ def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache,
                 serials[srv] = serial
                 if mname != "N/A": mname_target = mname
                 
-                axfr_ok, axfr_msg = dns_engine.check_axfr(srv, domain) if settings.enable_axfr_check else (False, "DISABLED")
+                axfr_ok, axfr_msg, axfr_latency = dns_engine.check_axfr(srv, domain) if settings.enable_axfr_check else (False, "DISABLED", None)
                 logging.info(f"[PHASE 2] Zone {domain} on {srv}: SOA Serial: {serial}, AXFR: {axfr_ok} ({axfr_msg})")
+                if settings.enable_execution_log and (soa['status'] != "NOERROR" or serial == "?"):
+                    logging.info("[PHASE 2] Zone %s on %s SOA diagnostic: %s", domain, srv, _query_log_payload(soa, include_full_response=True))
                 
-                caa_ok, caa_recs = dns_engine.validate_caa(srv, domain, rd=is_recursive) if settings.enable_caa_check else (False, [])
+                caa_ok, caa_recs, caa_latency, caa_meta = dns_engine.validate_caa(srv, domain, rd=is_recursive) if settings.enable_caa_check else (False, [], None, {})
                 logging.info(f"[PHASE 2] Zone {domain} on {srv}: CAA Records: {len(caa_recs)}")
                 
                 res = {
@@ -645,6 +1165,9 @@ def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache,
                     "serial": serial, "mname": mname, "rname": rname,
                     "axfr_vulnerable": axfr_ok, "axfr_detail": axfr_msg, "status": soa['status'],
                     "aa": aa, "latency": latency, "ns_list": ns_list,
+                    "soa_latency": latency, "soa_fallback_latency": soa_fallback_latency,
+                    "ns_latency": ns_latency, "axfr_latency": axfr_latency,
+                    "caa_latency": caa_latency, "zone_dnssec_latency": zone_dnssec_latency,
                     "soa_latency_warn": settings.soa_latency_warn,
                     "soa_latency_crit": settings.soa_latency_crit,
                     "axfr_allowed_groups": settings.axfr_allowed_groups,
@@ -652,18 +1175,28 @@ def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache,
                     "dnssec": is_signed,
                     "caa_records": caa_recs,
                     "is_dead": False,
-                    "check_scope": "FULL"
+                    "check_scope": "FULL",
+                    "scope_confidence": "MEDIUM" if used_fallback else "HIGH",
+                    "used_fallback": used_fallback,
                 }
+                _store_query_evidence(res, "soa", soa)
+                _store_probe_repeat_summary(res, "soa", soa_repeat)
+                _store_query_evidence(res, "ns", ns_q)
+                _store_probe_repeat_summary(res, "ns", ns_repeat)
+                _store_probe_evidence(res, "caa", caa_meta)
+                _store_probe_evidence(res, "zone_dnssec", zone_dnssec_meta)
                 local_results.append(res)
             except Exception as e:
-                logging.error(f"[PHASE 2] Error checking zone {domain} on {srv}: {e}")
+                logging.exception(f"[PHASE 2] Error checking zone {domain} on {srv}")
                 # Critical: Include group in error result so UI doesn't show UNCATEGORIZED
                 local_results.append({
                     "domain": domain, "server": srv, "group": group_name,
                     "serial": "?", "status": f"ERROR: {str(e)}", "axfr_vulnerable": False,
                     "axfr_detail": "ERROR", "caa_records": [], "web_risks": infra.get("web_risks", []),
-                    "dnssec": None, "latency": 0, "ns_list": [], "check_scope": "ERROR",
-                    "mname": "N/A", "rname": "N/A"
+                    "dnssec": None, "latency": None, "ns_list": [], "check_scope": "ERROR",
+                    "soa_latency": None, "soa_fallback_latency": None, "ns_latency": None,
+                    "axfr_latency": None, "caa_latency": None, "zone_dnssec_latency": None,
+                    "mname": "N/A", "rname": "N/A", "scope_confidence": "NONE", "used_fallback": False
                 })
 
         is_synced = len(set(s for s in serials.values() if s != "N/A")) <= 1
@@ -709,6 +1242,30 @@ def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache,
             r["zone_is_synced"] = is_synced
             r["ns_consistent"] = ns_consistent
 
+        if settings.enable_execution_log:
+            logging.info(
+                "[PHASE 2] Domain %s summary: synced=%s, ns_consistent=%s, timers_ok=%s, "
+                "timer_issues=%s, mname_reachable=%s, rows=%s",
+                domain,
+                is_synced,
+                ns_consistent,
+                audit.get("timers_ok"),
+                audit.get("timers_issues", []),
+                audit.get("mname_reachable"),
+                [
+                    {
+                        "server": r.get("server"),
+                        "status": r.get("status"),
+                        "scope": r.get("check_scope"),
+                        "serial": r.get("serial"),
+                        "ns_list": r.get("ns_list", []),
+                        "dnssec": r.get("dnssec"),
+                        "caa": len(r.get("caa_records", [])),
+                    }
+                    for r in local_results
+                ],
+            )
+
         with lock:
             zone_results.extend(local_results)
             active_items.pop(domain, None)
@@ -718,7 +1275,7 @@ def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache,
     counters = {'done': 0}
     total = len(zones)
     # ui.print_phase_header("2: Zone Integrity") # Header moved down after progress
-    stop_event, watcher, watchdog_state = start_phase_watchdog("Checking Zones", counters, total, active_items, lock)
+    stop_event, watcher, watchdog_state = start_phase_watchdog("Checking Zones", counters, total, active_items, lock, log_enabled=settings.enable_execution_log)
     with concurrent.futures.ThreadPoolExecutor(max_workers=settings.max_threads) as executor:
         futures = [executor.submit(_check_zone, dom, srvs) for dom, srvs in zones.items()]
         concurrent.futures.wait(futures)
@@ -755,7 +1312,16 @@ def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache,
             last_domain = res['domain']
             
         if settings.enable_execution_log:
-            logging.info(f"[PHASE 2] ZONE DETAIL: Domain={res['domain']}, Server={res['server']}, Score={res.get('zone_score', 0)}")
+            logging.info(
+                "[PHASE 2] ZONE DETAIL: Domain=%s, Server=%s, Score=%s, Status=%s, Scope=%s, Synced=%s, NS-Consistent=%s",
+                res['domain'],
+                res['server'],
+                res.get('zone_score', 0),
+                res.get('status'),
+                res.get('check_scope'),
+                res.get('zone_is_synced'),
+                res.get('ns_consistent'),
+            )
         ui.print_zone_detail(res['server'], res['domain'], res)
     
     # Print audit block for the LAST domain
@@ -788,6 +1354,103 @@ def run_phase2_zones(domains_raw, dns_groups, dns_engine, settings, infra_cache,
         
         ca_adoption = sum(1 for r in zone_results if len(r.get('caa_records', [])) > 0)
         insights["CAA Adoption"] = f"{(ca_adoption / total_checks) * 100:.1f}% (SSL Policy)"
+        zone_probe_latencies = []
+        for row in zone_results:
+            zone_probe_latencies.extend(_collect_available_latencies(
+                row.get("soa_latency"),
+                row.get("soa_fallback_latency"),
+                row.get("ns_latency"),
+                row.get("axfr_latency"),
+                row.get("caa_latency"),
+                row.get("zone_dnssec_latency"),
+            ))
+        if zone_probe_latencies:
+            avg_zone_latency = sum(zone_probe_latencies) / len(zone_probe_latencies)
+            insights["Zone Response Health"] = f"{max(0, 100 - (avg_zone_latency / settings.soa_latency_warn * 50)):.1f}% ({_format_probe_basis(zone_probe_latencies)})"
+        else:
+            insights["Zone Response Health"] = "N/A (no successful zone probe timings)"
+
+        authority_scores = []
+        transfer_scores = []
+        hygiene_scores = []
+        repeatability_scores = []
+        fallback_count = 0
+        confidence_scores = {"HIGH": 0, "MEDIUM": 0, "LOW": 0, "NONE": 0}
+
+        for row in zone_results:
+            if row.get("used_fallback"):
+                fallback_count += 1
+            confidence = row.get("scope_confidence", "NONE")
+            confidence_scores[confidence] = confidence_scores.get(confidence, 0) + 1
+
+            authority_checks = []
+            if row.get("status") == "NOERROR":
+                authority_checks.append(1 if row.get("aa") else 0)
+                authority_checks.append(1 if row.get("zone_is_synced") else 0)
+                ns_consistent = row.get("ns_consistent")
+                if ns_consistent is not None:
+                    authority_checks.append(1 if ns_consistent else 0)
+                authority_checks.append(1 if row.get("mname") not in {"N/A", "?"} else 0)
+            if authority_checks:
+                authority_scores.append((sum(authority_checks) / len(authority_checks)) * 100)
+
+            transfer_checks = []
+            allowed_groups = row.get("axfr_allowed_groups", [])
+            current_group = str(row.get("group", "")).upper()
+            expected_transfer = any(g in current_group for g in allowed_groups) if allowed_groups else False
+            if row.get("axfr_vulnerable"):
+                transfer_checks.append(100 if expected_transfer else 0)
+            else:
+                detail = str(row.get("axfr_detail", "")).upper()
+                if "REFUSED" in detail or "REJECTED" in detail:
+                    transfer_checks.append(100 if not expected_transfer else 60)
+                elif "TIMEOUT" in detail:
+                    transfer_checks.append(40)
+                elif "DISABLED" in detail:
+                    transfer_checks.append(50)
+                else:
+                    transfer_checks.append(35)
+            transfer_scores.extend(transfer_checks)
+
+            hygiene_checks = []
+            if row.get("dnssec") is not None:
+                hygiene_checks.append(1 if row.get("dnssec") else 0)
+            hygiene_checks.append(1 if len(row.get("caa_records", [])) > 0 else 0)
+            audit = row.get("zone_audit", {})
+            hygiene_checks.append(1 if audit.get("timers_ok") else 0)
+            mname_reachable = str(audit.get("mname_reachable", ""))
+            hygiene_checks.append(1 if "(UP)" in mname_reachable else 0)
+            hygiene_checks.append(1 if not row.get("web_risks") else 0)
+            if hygiene_checks:
+                hygiene_scores.append((sum(hygiene_checks) / len(hygiene_checks)) * 100)
+
+            for probe_name in ["soa", "ns"]:
+                sample_count = row.get(f"{probe_name}_sample_count", 0) or 0
+                stable = row.get(f"{probe_name}_status_consistent")
+                if sample_count >= 2 and stable is not None:
+                    repeatability_scores.append(100 if stable else 0)
+
+        if authority_scores:
+            insights["Authority Integrity"] = f"{(sum(authority_scores) / len(authority_scores)):.1f}% (AA, sync, NS, MNAME integrity)"
+        else:
+            insights["Authority Integrity"] = "N/A (insufficient authoritative observations)"
+        if transfer_scores:
+            insights["Transfer Exposure Posture"] = f"{(sum(transfer_scores) / len(transfer_scores)):.1f}% (AXFR behavior versus expectation)"
+        else:
+            insights["Transfer Exposure Posture"] = "N/A (no AXFR observations)"
+        if hygiene_scores:
+            insights["Zone Hygiene"] = f"{(sum(hygiene_scores) / len(hygiene_scores)):.1f}% (DNSSEC, CAA, timers, MNAME, web exposure)"
+        else:
+            insights["Zone Hygiene"] = "N/A (no hygiene observations)"
+        insights["Fallback Dependency"] = f"{(fallback_count / total_checks) * 100:.1f}% ({fallback_count}/{total_checks} rows used fallback)" if total_checks else "N/A"
+        insights["Scope Confidence"] = (
+            f"H:{confidence_scores.get('HIGH', 0)} M:{confidence_scores.get('MEDIUM', 0)} "
+            f"L:{confidence_scores.get('LOW', 0)} N:{confidence_scores.get('NONE', 0)}"
+        )
+        if repeatability_scores:
+            insights["Zone Stability"] = f"{(sum(repeatability_scores) / len(repeatability_scores)):.1f}% (SOA/NS repeated status stability)"
+        else:
+            insights["Zone Stability"] = "N/A (no repeated SOA/NS samples)"
 
     phase_duration = time.time() - phase_start_time
     if settings.enable_ui_legends:
@@ -825,10 +1488,12 @@ def run_phase3_records(tasks, dns_engine, dns_groups, settings, infra_cache, res
             if infra.get("is_dead"):
                 local_res = [{
                     "domain": target, "group": group_name, "server": server, "type": rtype,
-                    "status": "UNREACHABLE", "latency": 0, "ping": "FAIL", "port53": "CLOSED",
+                    "status": "UNREACHABLE", "latency": None, "ping": "FAIL", "port53": "CLOSED",
                     "version": "DEAD", "recursion": "DEAD", "dot": "DEAD", "doh": "DEAD",
                     "nsid": None, "internally_consistent": "N/A", "answers": "SKIPPED: SERVER DOWN",
-                    "is_consistent": True
+                    "is_consistent": True,
+                    "latency_first": None, "latency_avg": None, "latency_min": None, "latency_max": None,
+                    "chain_latency": None, "mx_port25_latency": None, "wildcard_latency": None
                 } for rtype in record_types if rtype.strip()]
                 with lock:
                     results.extend(local_res)
@@ -853,6 +1518,9 @@ def run_phase3_records(tasks, dns_engine, dns_groups, settings, infra_cache, res
                     
                 is_consistent = compare_consistency(queries, settings)
                 main_q = queries[0]
+                query_latencies = [q.get("latency") for q in queries if q.get("latency") is not None]
+                chain_latencies = []
+                mx_port25_latencies = []
                 
                 # SEMANTIC AUDIT
                 findings = []
@@ -882,18 +1550,27 @@ def run_phase3_records(tasks, dns_engine, dns_groups, settings, infra_cache, res
                     if rtype in ["CNAME", "MX"]:
                         # Extract target (MX has priority first)
                         target_host = ans.split(' ')[1] if rtype == "MX" else ans.rstrip('.')
-                        chain_ok, chain_msg = dns_engine.resolve_chain(server, target_host, rtype, rd=is_recursive)
+                        chain_ok, chain_msg, chain_latency = dns_engine.resolve_chain(server, target_host, rtype, rd=is_recursive)
+                        if chain_latency is not None:
+                            chain_latencies.append(chain_latency)
                         if not chain_ok:
                             findings.append(f"Dangling {rtype} target: {target_host} ({chain_msg})")
                         else:
                             # MX Target Port 25 Check
                             if rtype == "MX":
-                                 if not dns_engine.check_port_25(target_host):
+                                 mx_ok, mx_port25_latency = dns_engine.check_port_25(target_host)
+                                 if mx_port25_latency is not None:
+                                     mx_port25_latencies.append(mx_port25_latency)
+                                 if not mx_ok:
                                      findings.append(f"MX Target {target_host} UNREACHABLE on Port 25 (SMTP)")
 
                 entry = {
                     "domain": target, "group": group_name, "server": server, "type": rtype,
-                    "status": main_q['status'], "latency": main_q['latency'],
+                    "status": main_q['status'], "latency": _status_latency(main_q['status'], main_q['latency']),
+                    "latency_first": _status_latency(main_q['status'], main_q['latency']),
+                    "latency_avg": round(sum(query_latencies) / len(query_latencies), 2) if query_latencies else None,
+                    "latency_min": round(min(query_latencies), 2) if query_latencies else None,
+                    "latency_max": round(max(query_latencies), 2) if query_latencies else None,
                     "ping": infra.get("ping", "N/A"), "port53": infra.get("port53u", "N/A"),
                     "version": infra.get("version", "N/A"), "recursion": infra.get("recursion", "N/A"),
                     "dot": infra.get("dot", "N/A"), "doh": infra.get("doh", "N/A"),
@@ -901,11 +1578,25 @@ def run_phase3_records(tasks, dns_engine, dns_groups, settings, infra_cache, res
                     "answers": ", ".join(main_q['answers']),
                     "is_consistent": is_consistent,
                     "findings": findings,
+                    "chain_latency": round(sum(chain_latencies) / len(chain_latencies), 2) if chain_latencies else None,
+                    "mx_port25_latency": round(sum(mx_port25_latencies) / len(mx_port25_latencies), 2) if mx_port25_latencies else None,
                     "wildcard_detected": False,
                     "wildcard_answers": [],
-                    "wildcard_scope": "ZONE"
+                    "wildcard_scope": "ZONE",
+                    "wildcard_latency": None
                 }
-                logging.info(f"[PHASE 3] Query: {target} {rtype} @ {server} -> {entry['status']} ({entry['latency']:.1f}ms). Findings: {len(findings)}")
+                latency_display = f"{entry['latency']:.1f}ms" if entry.get("latency") is not None else "N/A"
+                logging.info(f"[PHASE 3] Query: {target} {rtype} @ {server} -> {entry['status']} ({latency_display}). Findings: {len(findings)}")
+                if settings.enable_execution_log and (entry['status'] != "NOERROR" or findings or not is_consistent):
+                    logging.info(
+                        "[PHASE 3] Query diagnostic: target=%s type=%s server=%s consistent=%s findings=%s payload=%s",
+                        target,
+                        rtype,
+                        server,
+                        is_consistent,
+                        findings,
+                        _query_log_payload(main_q, include_full_response=True),
+                    )
                 local_res.append(entry)
             
             with lock:
@@ -914,10 +1605,10 @@ def run_phase3_records(tasks, dns_engine, dns_groups, settings, infra_cache, res
                 counters['done'] += 1
                 ui.print_progress(counters['done'], total, "Record Consistency", status_suffix=watchdog_state["status"])
         except Exception as e:
-            logging.error(f"[PHASE 3] Execution error for {target} @ {server}: {e}")
+            logging.exception(f"[PHASE 3] Execution error for {target} @ {server}")
             with lock:
                 # Add a partial/error result instead of nothing
-                results.append({"domain": target, "group": group_name, "server": server, "type": "ERROR", "status": str(e), "latency": 0, "is_consistent": False})
+                results.append({"domain": target, "group": group_name, "server": server, "type": "ERROR", "status": str(e), "latency": None, "is_consistent": False})
                 active_items.pop(task_label, None)
                 counters['done'] += 1
                 ui.print_progress(counters['done'], total, "Record Consistency", status_suffix=watchdog_state["status"])
@@ -925,7 +1616,7 @@ def run_phase3_records(tasks, dns_engine, dns_groups, settings, infra_cache, res
     counters = {'done': 0}
     total = len(tasks)
     
-    stop_event, watcher, watchdog_state = start_phase_watchdog("Record Consistency", counters, total, active_items, lock)
+    stop_event, watcher, watchdog_state = start_phase_watchdog("Record Consistency", counters, total, active_items, lock, log_enabled=settings.enable_execution_log)
     with concurrent.futures.ThreadPoolExecutor(max_workers=settings.max_threads) as executor:
         futures = [executor.submit(_worker, *t) for t in tasks]
         concurrent.futures.wait(futures)
@@ -957,14 +1648,15 @@ def run_phase3_records(tasks, dns_engine, dns_groups, settings, infra_cache, res
             is_recursive = dns_groups.get(r['group'], {}).get("type") == "recursive"
             wildcard_cache[current_zone_srv] = dns_engine.detect_wildcard(r['server'], r['domain'], rd=is_recursive)
         else:
-            wildcard_cache[current_zone_srv] = (False, [])
+            wildcard_cache[current_zone_srv] = (False, [], None)
 
     reported_wildcards = set()
     for r in sorted_results:
         current_zone_srv = (r['domain'], r['server'])
-        has_wc, wc_ans = wildcard_cache.get(current_zone_srv, (False, []))
+        has_wc, wc_ans, wc_latency = wildcard_cache.get(current_zone_srv, (False, [], None))
         r["wildcard_detected"] = has_wc
         r["wildcard_answers"] = wc_ans or []
+        r["wildcard_latency"] = wc_latency
 
         print(ui.format_result(
             r['domain'], r['group'], r['server'], r['type'], r['status'], r['latency'], r['is_consistent'],
@@ -991,6 +1683,17 @@ def run_phase3_records(tasks, dns_engine, dns_groups, settings, infra_cache, res
         
         findings_total = sum(len(r.get('findings', [])) for r in results)
         insights["Finding Density"] = f"{findings_total / len(results):.2f} issues/query"
+        measured_record_latencies = [r.get("latency_avg") for r in results if r.get("latency_avg") is not None]
+        if measured_record_latencies:
+            avg_record_latency = sum(measured_record_latencies) / len(measured_record_latencies)
+            insights["Record Response Health"] = f"{max(0, 100 - (avg_record_latency / settings.rec_latency_warn * 50)):.1f}% ({avg_record_latency:.1f}ms avg)"
+        jitter_values = [
+            (r.get("latency_max") - r.get("latency_min"))
+            for r in results
+            if r.get("latency_max") is not None and r.get("latency_min") is not None
+        ]
+        if jitter_values:
+            insights["Jitter Index"] = f"{(sum(jitter_values) / len(jitter_values)):.1f}ms avg spread"
 
     phase_duration = time.time() - phase_start_time
     if settings.enable_ui_legends:
@@ -1152,7 +1855,23 @@ def main():
     parser.add_argument("-g", "--groups", default=os.path.join("config", "groups.csv"), help="Groups CSV")
     parser.add_argument("-o", "--output", default=settings.log_dir, help="Output DIR")
     parser.add_argument("-p", "--phases", help="Select phases to run (e.g. 1,3 or 2)")
+    parser.add_argument("--install-missing-deps", action="store_true", help="Allow automatic installation of missing Python dependencies")
     args = parser.parse_args()
+
+    missing_packages = _get_missing_dependencies()
+    _handle_missing_dependencies(missing_packages, auto_install=args.install_missing_deps)
+    _log_bootstrap_messages(settings.enable_execution_log)
+
+    global urllib3, DNSEngine, Connectivity, Reporter, validators, ui
+    import urllib3
+    from core.dns_engine import DNSEngine
+    from core.connectivity import Connectivity
+    from core.reporting import Reporter
+    import core.validators as validators
+    import core.ui as ui
+
+    # Silence DoH/DoT HTTPS warnings only after dependency checks and imports succeed.
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     
     # Process phase selection
     run_p1 = settings.enable_phase_server
@@ -1311,7 +2030,8 @@ def main():
     if settings.enable_json_report or settings.enable_html_report:
         paths["JSON"] = reporter.export_json(report_data, f"report{suffix}.json")
 
-    paths["TXT"] = reporter.export_text(report_data, f"report{suffix}.txt")
+    if settings.enable_text_report:
+        paths["TXT"] = reporter.export_text(report_data, f"report{suffix}.txt")
     
     if settings.enable_csv_report:
         # 1. Details Phase 1 (Infrastructure)
